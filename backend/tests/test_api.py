@@ -481,3 +481,32 @@ def test_partnerschaftsbonus_advice_includes_lost_salary():
     rec = next(x for x in client.post("/api/analyse", json=COUPLE).json()["recommendations"]
                if x["id"] == "partnerschaftsbonus")
     assert "household income" in rec["detail"]
+
+
+@pytest.mark.parametrize("change", [
+    {},
+    {"children_expected": 2},  # 12 weeks Mutterschutz: months 1–3 count as Basis
+    {"premature_or_disability": True},
+    {"due_date": "2027-07-15"},  # born 3½ weeks early: Schutzfrist extended
+    {"parents": [{**COUPLE["parents"][0], "erwerbsart": "keine", "monthly_gross": 0}, COUPLE["parents"][1]]},
+    {"parents": [{**p, "erwerbsart": "keine", "monthly_gross": 0} for p in COUPLE["parents"]]},  # no Partnermonate
+    {"parents": [COUPLE["parents"][0], {**COUPLE["parents"][1], "birthing_parent": True}],
+     "household": "partnership"},
+])
+def test_every_offered_bundle_is_feasible(change):
+    body = {**COUPLE, **change}
+    if "parents" in change and sum(p.get("birthing_parent", False) for p in body["parents"]) > 1:
+        body["parents"][0] = {**body["parents"][0], "birthing_parent": False}
+    r = client.post("/api/analyse", json=body).json()["plan"]["presets"]
+    assert r and all(p["valid"] for p in r), {p["id"]: p["errors"] for p in r if not p["valid"]}
+    for p in r:  # and it stays valid when applied as the user's plan
+        applied = client.post("/api/analyse", json={**body, "timeline": p["timeline"], "hours": p["hours"]}).json()
+        assert applied["plan"]["valid"], (p["id"], applied["plan"]["errors"])
+
+
+def test_bundles_adapt_to_mutterschutz_and_jobs():
+    twins = {p["id"]: p for p in client.post("/api/analyse", json={**COUPLE, "children_expected": 2}).json()["plan"]["presets"]}
+    assert twins["long"]["timeline"][0][:4] == ["basis", "basis", "basis", "plus"]
+    jobless = [{**COUPLE["parents"][0], "erwerbsart": "keine", "monthly_gross": 0}, COUPLE["parents"][1]]
+    ids = [p["id"] for p in client.post("/api/analyse", json={**COUPLE, "parents": jobless}).json()["plan"]["presets"]]
+    assert "bonus" not in ids and "early" not in ids and "classic" in ids

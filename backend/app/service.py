@@ -26,8 +26,8 @@ from .elterngeld import (
 from .fmt import eur
 from .models import AnalyseRequest, ParentIn, PayslipPersonIn, ZvEPersonIn
 from .mutterschutz import Mutterschaftsgeld, estimate_net_monthly, mutterschaftsgeld
-from .plan import (EG_TYPES, MaternityCredit, ParentContext, PlanResult, add_months, candidate_fixes, evaluate,
-                   from_counts)
+from .plan import (EG_TYPES, MaternityCredit, ParentContext, PlanResult, forced_basis_months, add_months,
+                   candidate_fixes, evaluate, from_counts, partnermonate_possible)
 from .plan import presets as plan_presets
 from . import sozial
 from .zve import ZvEHaushalt, ZvEPerson, freibetraege_fuer_kinder, schaetze_zve
@@ -426,6 +426,18 @@ def _plan_fixes(req: AnalyseRequest, outcomes: list[ParentOutcome], plan: PlanRe
     return fixes[:MAX_FIXES]
 
 
+def _bundles(req: AnalyseRequest, outcomes: list[ParentOutcome]) -> list[dict]:
+    """Plan bundles built from this household's limits (Mutterschutz months, Partnermonate, jobs)."""
+    contexts, kw = _plan_inputs(req, outcomes)
+    first = _first_parent(req)
+    forced = forced_basis_months(req.birth_date, kw["birthing"], kw["maternity"]) if kw["birthing"] == first else []
+    partner_ok = partnermonate_possible(contexts)
+    budget = 14 if (len(req.parents) == 2 or req.single_parent_4c) and partner_ok else 12
+    return plan_presets(len(req.parents), first, req.single_parent_4c,
+                        part_time_hours=[p.part_time_hours for p in req.parents], forced_basis=len(forced),
+                        months_budget=budget, employed=[c.employee for c in contexts])
+
+
 COMPARE_MONTHS = 24  # horizon for comparing plans: household income and months at home
 
 
@@ -458,10 +470,10 @@ def analyse(req: AnalyseRequest) -> dict:
     outcomes = [_parent_outcome(req, p, gb) for p in req.parents]
     plan = _plan(req, outcomes)
     preset_results = []
-    bundles = plan_presets(len(req.parents), _first_parent(req), req.single_parent_4c,
-                           part_time_hours=[p.part_time_hours for p in req.parents])
-    for pr in bundles:
+    for pr in _bundles(req, outcomes):
         r = _plan(req, outcomes, pr["timeline"], hours=pr["hours"])
+        if not r.valid:
+            continue  # only offer bundles that keep every rule for this household
         preset_results.append({**pr, "timeline": r.timeline, "valid": r.valid, "errors": r.errors,
                                "totals": r.totals, "household_total": r.household_total,
                                "months_with_elterngeld": r.months_with_elterngeld, **_plan_summary(r)})

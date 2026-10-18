@@ -297,7 +297,7 @@ class MaternityCredit:
     paid_per_day: Decimal | None = None
 
 
-def _forced_basis_months(birth: date, birthing: int | None, maternity: MaternityCredit | None) -> list[int]:
+def forced_basis_months(birth: date, birthing: int | None, maternity: MaternityCredit | None) -> list[int]:
     """§ 4 Abs. 4 Satz 3 BEEG: months with creditable Mutterschaftsleistungen count as Basis months."""
     if (maternity is None or birthing is None
             or (maternity.credited_per_day is not None and maternity.credited_per_day <= 0)):
@@ -321,7 +321,7 @@ def candidate_fixes(
     Each result: {"timeline", "hours", "changes": [{"parent", "lm", "from", "to"}]}. A changed month
     gets its default hours back."""
     n = len(parents)
-    forced = _forced_basis_months(birth, birthing, maternity)
+    forced = forced_basis_months(birth, birthing, maternity)
     base = normalise(timeline, n)
     for lm in forced:
         base[birthing][lm - 1] = "basis"  # type: ignore[index]
@@ -378,7 +378,7 @@ def evaluate(
     if birthing is None:
         maternity = None
     ms_end = maternity.end if maternity else None
-    forced = _forced_basis_months(birth, birthing, maternity)
+    forced = forced_basis_months(birth, birthing, maternity)
     if birthing is not None and forced:
         changed = [lm for lm in forced if tl[birthing][lm - 1] != "basis"]
         for lm in forced:
@@ -603,11 +603,20 @@ def _elternzeit(tl: list[list[str]], parents: list[ParentContext], birth: date, 
 
 
 def presets(n_parents: int, first: int, single_parent_4c: bool,
-            part_time_hours: list[Decimal] | None = None) -> list[dict]:
+            part_time_hours: list[Decimal] | None = None, *, forced_basis: int = 0,
+            months_budget: int | None = None, employed: list[bool] | None = None) -> list[dict]:
     """Plan bundles to compare and customise. `first` is the birthing (or first) parent.
 
-    Each bundle has a timeline and the weekly hours for its working months: the parent's planned
-    part-time hours if they fit the rule (Bonus 24–32 h, Plus with work up to 32 h), else 24 h."""
+    The bundles are built from the household's limits instead of fixed month numbers:
+    * forced_basis – Lebensmonate of `first` that count as Basis because of Mutterschaftsgeld
+      (2 usually, 3 with 12 weeks of Mutterschutz or an early birth; § 4 Abs. 4 Satz 3),
+    * months_budget – Basis months for the household: 14 with Partnermonate, else 12 (§ 4 Abs. 3),
+    * employed – who has a job: bonus months and part-time work need one (§ 4b).
+    Each bundle carries the weekly hours for its working months: the parent's planned part-time
+    hours if they fit the rule (Bonus 24–32 h, Plus with work up to 32 h), else 24 h."""
+    budget = months_budget or (14 if (n_parents == 2 or single_parent_4c) else 12)
+    jobs = employed or [True] * n_parents
+    m = min(forced_basis, BASIS_LAST_LM)
 
     def blank() -> list[list[str]]:
         return [["none"] * MAX_LM for _ in range(n_parents)]
@@ -632,45 +641,59 @@ def presets(n_parents: int, first: int, single_parent_4c: bool,
 
     if n_parents == 2:
         a, b = first, 1 - first
-        tl = blank(); fill(tl, a, 1, 12, "basis"); fill(tl, b, 13, 14, "basis")
-        add("classic", "Classic: 12 + 2 Basis months",
-            "One parent 12 Basis months, the other the 2 Partnermonate afterwards. The most Elterngeld per month "
-            "at home.", tl)
-        tl = blank(); fill(tl, a, 1, 7, "basis"); fill(tl, b, 8, 14, "basis")
-        add("split", "Split: 7 + 7 Basis months", "Both parents take 7 Basis months one after the other.", tl)
-        tl = blank(); fill(tl, a, 1, 6, "basis"); fill(tl, a, 7, 18, "plus"); fill(tl, b, 13, 14, "basis")
+        both_work = jobs[a] and jobs[b]
+        own = budget - 2  # the first parent's months; the other parent takes the last 2
+        tail = (own + 1, own + 2)  # the other parent's 2 Basis months right afterwards
+        tl = blank(); fill(tl, a, 1, own, "basis"); fill(tl, b, *tail, "basis")
+        add("classic", f"Classic: {own} + 2 Basis months",
+            f"One parent {own} Basis months, the other 2 months afterwards. The most Elterngeld per month at home.", tl)
+        half = max(budget // 2, m)
+        tl = blank(); fill(tl, a, 1, half, "basis"); fill(tl, b, half + 1, budget, "basis")
+        add("split", f"Split: {half} + {budget - half} Basis months",
+            "Both parents take Basis months one after the other.", tl)
+        k = max(6, m)
+        plus_end = k + 2 * (own - k)
+        tl = blank(); fill(tl, a, 1, k, "basis"); fill(tl, a, k + 1, plus_end, "plus"); fill(tl, b, *tail, "basis")
         add("plus", "Longer: Basis + ElterngeldPlus",
-            "6 Basis then 12 Plus months for one parent (until month 18); the other parent takes 2 Basis months. "
-            "Same budget, spread over a longer time.", tl)
-        tl = blank(); fill(tl, a, 1, 12, "basis"); fill(tl, b, 13, 14, "basis")
-        fill(tl, a, 15, 18, "bonus"); fill(tl, b, 15, 18, "bonus")
-        add("bonus", "Classic + Partnerschaftsbonus",
-            "Classic plan plus 4 bonus months for each parent (months 15–18) while both work 24–32 h/week. Pays off "
-            "only if you want fewer hours anyway – with good pay the lost salary can exceed the bonus.", tl)
-        tl = blank(); fill(tl, a, 1, 12, "basis"); fill(tl, b, 3, 6, "plus")
-        fill(tl, a, 15, 18, "bonus"); fill(tl, b, 15, 18, "bonus")
-        add("together", "Together at home + bonus",
-            "Classic for one parent; the other is at home too in months 3–6 on ElterngeldPlus (which may overlap "
-            "with Basis), then both take the bonus in months 15–18.", tl)
-        tl = blank(); fill(tl, a, 1, 2, "basis"); fill(tl, a, 3, 22, "plus"); fill(tl, b, 13, 14, "basis")
-        add("long", "Long leave: Plus at home until month 22",
-            "One parent stays at home on ElterngeldPlus until month 22; the other takes 2 Basis months. The same "
-            "Elterngeld as the classic plan over almost twice the time – but more salary lost.", tl)
-        tl = blank(); fill(tl, a, 1, 2, "basis"); fill(tl, a, 3, 12, "plus_tz"); fill(tl, b, 13, 14, "basis")
-        fill(tl, a, 15, 18, "bonus"); fill(tl, b, 15, 18, "bonus")
-        add("early", "Back to work early (part-time)",
-            "One parent works part-time from month 3 on ElterngeldPlus, the other takes 2 Basis months, then both "
-            "take the bonus. Most salary; with good part-time pay Plus drops to the 150 € minimum.", tl)
+            f"{k} Basis then {plus_end - k} Plus months for one parent (until month {plus_end}); the other parent "
+            "takes 2 Basis months. Same budget, spread over a longer time.", tl)
+        if both_work:
+            tl = blank(); fill(tl, a, 1, own, "basis"); fill(tl, b, *tail, "basis")
+            fill(tl, a, 15, 18, "bonus"); fill(tl, b, 15, 18, "bonus")
+            add("bonus", "Classic + Partnerschaftsbonus",
+                "Classic plan plus 4 bonus months for each parent (months 15–18) while both work 24–32 h/week. Pays "
+                "off only if you want fewer hours anyway – with good pay the lost salary can exceed the bonus.", tl)
+        tl = blank(); fill(tl, a, 1, own, "basis"); fill(tl, b, m + 1, m + 4, "plus")
+        if both_work:
+            fill(tl, a, 15, 18, "bonus"); fill(tl, b, 15, 18, "bonus")
+        add("together", "Together at home" + (" + bonus" if both_work else ""),
+            f"Classic for one parent; the other is at home too in months {m + 1}–{m + 4} on ElterngeldPlus (which may "
+            "overlap with Basis)" + (", then both take the bonus in months 15–18." if both_work else "."), tl)
+        k = max(m, 2)
+        plus_end = k + 2 * (own - k)
+        tl = blank(); fill(tl, a, 1, k, "basis"); fill(tl, a, k + 1, plus_end, "plus"); fill(tl, b, *tail, "basis")
+        add("long", f"Long leave: Plus at home until month {plus_end}",
+            f"One parent stays at home on ElterngeldPlus until month {plus_end}; the other takes 2 Basis months. The "
+            "same Elterngeld as the classic plan over almost twice the time – but more salary lost.", tl)
+        if jobs[a]:
+            tl = blank(); fill(tl, a, 1, k, "basis"); fill(tl, a, k + 1, 12, "plus_tz"); fill(tl, b, *tail, "basis")
+            if both_work:
+                fill(tl, a, 15, 18, "bonus"); fill(tl, b, 15, 18, "bonus")
+            add("early", "Back to work early (part-time)",
+                f"One parent works part-time from month {k + 1} on ElterngeldPlus, the other takes 2 Basis months"
+                + (", then both take the bonus" if both_work else "") + ". Most salary; with good part-time pay Plus "
+                "drops to the 150 € minimum.", tl)
     else:
         a = 0
-        cap = 14 if single_parent_4c else 12
+        cap = budget
         tl = blank(); fill(tl, a, 1, cap, "basis")
         add("basis", f"{cap} Basis months", "All Basis months in one go.", tl)
-        half = cap // 2
-        tl = blank(); fill(tl, a, 1, half, "basis"); fill(tl, a, half + 1, half + cap, "plus")
-        add("plus", "Longer: Basis + ElterngeldPlus", f"{half} Basis then {cap} Plus months – same budget, longer coverage.", tl)
-        if single_parent_4c:
+        half = max(cap // 2, m)
+        tl = blank(); fill(tl, a, 1, half, "basis"); fill(tl, a, half + 1, half + 2 * (cap - half), "plus")
+        add("plus", "Longer: Basis + ElterngeldPlus",
+            f"{half} Basis then {2 * (cap - half)} Plus months – same budget, longer coverage.", tl)
+        if single_parent_4c and jobs[a]:
             tl = blank(); fill(tl, a, 1, cap, "basis"); fill(tl, a, 15, 18, "bonus")
             add("bonus", "Basis + Partnerschaftsbonus (§ 4c)",
-                "14 Basis months plus 4 bonus months while working 24–32 h/week.", tl)
+                f"{cap} Basis months plus 4 bonus months while working 24–32 h/week.", tl)
     return out
