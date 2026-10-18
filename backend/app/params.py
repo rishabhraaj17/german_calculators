@@ -106,3 +106,42 @@ def tax_year_for_birth(birth: date) -> TaxYear:
             f"{SUPPORTED_BIRTH_FROM.isoformat()} – {SUPPORTED_BIRTH_TO.isoformat()}."
         )
     return TAX_YEARS[birth.year - 1]
+
+
+# --- Social insurance figures for pension and health insurance during leave ----
+@dataclass(frozen=True)
+class SocialYear:
+    year: int
+    bezugsgroesse_month: D  # § 18 SGB IV
+    jaeg: D  # Jahresarbeitsentgeltgrenze, § 6 Abs. 6 SGB V
+    bbg_kv: D  # Beitragsbemessungsgrenze KV/PV (annual)
+    bbg_rv: D  # Beitragsbemessungsgrenze allgemeine RV (annual)
+    durchschnittsentgelt: D  # Anlage 1 SGB VI (final or provisional)
+    avg_zusatzbeitrag_pct: D  # § 242a SGB V
+    note: str
+
+
+SOCIAL_YEARS: dict[int, SocialYear] = {
+    2025: SocialYear(2025, D(3745), D(73800), D(66150), D(96600), D(49147), D("2.5"),
+                     "SV-Rechengrößen 2025; final average earnings 2025"),
+    2026: SocialYear(2026, D(3955), D(77400), D(69750), D(101400), D(51944), D("2.9"),
+                     "SV-Rechengrößenverordnung 2026 (BGBl. 2025 I Nr. 278); provisional average earnings"),
+    2027: SocialYear(2027, D(4130), D(84150), D(76500), D(106200), D(53452), D("2.9"),
+                     "Cabinet decision of 07.10.2026, Bundesrat pending; average Zusatzbeitrag 2027 not yet "
+                     "announced, 2026 value used"),
+}
+
+
+def social_year(year: int) -> SocialYear:
+    """Latest known figures for years after 2027 (marked as estimate in the UI)."""
+    return SOCIAL_YEARS[min(max(year, min(SOCIAL_YEARS)), max(SOCIAL_YEARS))]
+
+
+RENTENWERT = D("42.52")  # aktueller Rentenwert from 01.07.2026 (Rentenwertbestimmungsverordnung 2026)
+KEZ_EP_PER_MONTH = D("0.0833")  # § 70 Abs. 2 SGB VI
+KEZ_MONTHS = 36  # § 56 Abs. 5 SGB VI
+KV_GENERAL = D("0.146")  # § 241 SGB V
+KV_REDUCED = D("0.140")  # § 243 SGB V (no Krankengeld entitlement)
+PV_TOTAL = D("0.036")  # § 55 Abs. 1 SGB XI
+PV_CHILDLESS = D("0.006")  # § 55 Abs. 3 SGB XI
+PV_CHILD_REDUCTION = D("0.0025")  # § 55 Abs. 3a SGB XI, 2nd to 5th child under 25

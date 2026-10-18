@@ -17,6 +17,7 @@ function addParent(index, name, birthing) {
   $("[name=birthing_parent]", node).checked = birthing;
   $("[name=steuerklasse]", node).addEventListener("change", (e) =>
     node.classList.toggle("has-faktor", e.target.value === "IV_FAKTOR"));
+  $("[name=kv_art]", node).addEventListener("change", (e) => node.classList.toggle("is-private", e.target.value === "privat"));
   $("[name=aufenthalt]", node).addEventListener("change", (e) =>
     node.classList.toggle("show-permit", e.target.value === "ae_humanitaer"));
   $("[name=birthing_parent]", node).addEventListener("change", (e) => {
@@ -45,6 +46,7 @@ addParent(1, "Parent B", false);
 
 let currentTimeline = null; // month plan from the planner; null = default starting plan
 let currentHours = null; // weekly hours per parent and month; null entries = default for the month type
+let currentKez = null; // parent index credited with the Kindererziehungszeit (§ 56 SGB VI); null = default
 
 function syncHousehold() {
   const h = form.household.value;
@@ -59,7 +61,7 @@ function syncMode() {
   ["quick", "estimate", "bescheid"].forEach((m) => document.body.classList.toggle(`mode-${m}`, form.zve_mode.value === m));
 }
 form.addEventListener("change", (e) => {
-  if (e.target.name === "household") { syncHousehold(); currentTimeline = null; currentHours = null; }
+  if (e.target.name === "household") { syncHousehold(); currentTimeline = null; currentHours = null; currentKez = null; }
   if (e.target.name === "zve_mode") syncMode();
 });
 function syncCapYear() {
@@ -108,6 +110,8 @@ function parentPayload(node) {
     kv_art: v("kv_art").value,
     kv_pflichtversichert: v("kv_art").value === "gkv_pflicht",
     net_monthly: num(v("net_monthly")),
+    vacation_days: num(v("vacation_days")),
+    private_premium: num(v("private_premium")),
     part_time_gross: num(v("part_time_gross")),
     part_time_hours: num(v("part_time_hours")) ?? 0,
     weekly_hours: num(v("weekly_hours")) ?? 40,
@@ -164,6 +168,7 @@ function buildRequest() {
     zve,
     timeline: currentTimeline && currentTimeline.length === parents.length ? currentTimeline : null,
     hours: currentHours && currentHours.length === parents.length ? currentHours : null,
+    kez_parent: currentKez !== null && currentKez < parents.length ? currentKez : null,
   };
 }
 
@@ -235,7 +240,7 @@ function fillForm(data) {
   (req.parents || []).slice(0, 2).forEach((p, i) => {
     const node = nodes[i];
     ["label", "birthing_parent", "erwerbsart", "monthly_gross", "bonuses_annual", "bonuses_pending", "bav_monthly", "steuerklasse",
-      "faktor", "kirchensteuer", "kinderfreibetraege", "net_monthly", "part_time_gross", "part_time_hours", "weekly_hours",
+      "faktor", "kirchensteuer", "kinderfreibetraege", "net_monthly", "vacation_days", "private_premium", "part_time_gross", "part_time_hours", "weekly_hours",
     ].forEach((k) => setField(node, k, p[k]));
     setField(node, "extra_excluded_months", (p.extra_excluded_months || []).join(", "));
     setField(node, "kv_art", p.kv_art || (p.kv_pflichtversichert === false ? "gkv_freiwillig" : "gkv_pflicht"));
@@ -247,6 +252,7 @@ function fillForm(data) {
     setField(node, "aufenthalt_seit_monaten", b.aufenthalt_seit_monaten);
     node.classList.toggle("has-faktor", p.steuerklasse === "IV_FAKTOR");
     node.classList.toggle("show-permit", b.aufenthalt === "ae_humanitaer");
+    node.classList.toggle("is-private", p.kv_art === "privat");
     $("[name=label]", node).dispatchEvent(new Event("input"));
     node.syncPartTime?.();
   });
@@ -270,11 +276,16 @@ function fillForm(data) {
   syncCapYear();
   currentTimeline = Array.isArray(req.timeline) ? req.timeline : null;
   currentHours = Array.isArray(req.hours) ? req.hours : null;
+  currentKez = Number.isInteger(req.kez_parent) ? req.kez_parent : null;
 }
 
+let notifyTimer;
 function notify(msg) {
   const el = $("#storage-status");
   el.textContent = msg;
+  el.classList.remove("gone");
+  clearTimeout(notifyTimer);
+  notifyTimer = setTimeout(() => el.classList.add("gone"), 5000);
 }
 
 function readSaved() {
@@ -288,10 +299,14 @@ function readSaved() {
 
 function refreshLoadButton() {
   const saved = readSaved();
-  $("#load").disabled = !saved;
-  $("#load").textContent = saved ? "Load saved" : "Nothing saved yet";
-  $("#load").title = saved ? `Saved ${new Date(saved.saved_at).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" })}` : "";
+  const btn = $("#load");
+  const when = saved ? new Date(saved.saved_at).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : "";
+  btn.disabled = !saved;
+  btn.title = saved ? `Saved ${when}` : "Nothing saved yet";
+  btn.setAttribute("aria-label", saved ? `Load saved numbers from ${when}` : "Load saved – nothing saved yet");
+  $(".dock-meta").textContent = saved ? `Saved ${when}` : "Not saved yet";
 }
+
 
 $("#save").addEventListener("click", () => {
   try {
@@ -341,6 +356,7 @@ refreshLoadButton();
 function renderError(msg) {
   $("#plan-section").innerHTML = "";
   $("#results").innerHTML = `<div class="card error"><h2>Check your input</h2><p>${esc(msg)}</p></div>`;
+  refreshNav();
 }
 
 const STATUS_TEXT = { met: "Eligible", not_met: "Not eligible", conditional: "Probably eligible – verify" };
@@ -652,7 +668,7 @@ function planner(r) {
   const head2 = r.parents.map(() => '<th>Type</th><th>h/week</th><th class="num">Salary net</th><th class="num">Elterngeld</th><th class="num">Total net</th>').join("") + (n > 1 ? '<th class="num">Total net</th>' : "");
   const shownRows = p.rows.filter((row) => showAllMonths || row.lm <= lastShown);
   const colSum = (i, f) => shownRows.reduce((a, row) => a + Number(f(row.parents[i]) || 0), 0);
-  const foot = r.parents.map((_, i) => `<td></td><td></td><td class="num">${eur(colSum(i, (c) => c.net_pay))}</td><td class="num">${eur(colSum(i, (c) => (["basis", "plus", "plus_tz", "bonus"].includes(c.type) ? c.amount : 0) + Number(c.mutterschaftsgeld || 0)))}</td><td class="num total">${eur(colSum(i, (c) => c.total_net))}</td>`).join("")
+  const foot = r.parents.map((_, i) => `<td></td><td></td><td class="num">${eur(colSum(i, (c) => c.net_pay))}</td><td class="num">${eur(colSum(i, (c) => (["basis", "plus", "plus_tz", "bonus"].includes(c.type) ? Number(c.amount) : 0) + Number(c.mutterschaftsgeld || 0)))}</td><td class="num total">${eur(colSum(i, (c) => c.total_net))}</td>`).join("")
     + (n > 1 ? `<td class="num household">${eur(r.parents.reduce((a, _, i) => a + colSum(i, (c) => c.total_net), 0))}</td>` : "");
   const cols = `<colgroup><col class="c-lm"><col class="c-period">${r.parents.map(() => '<col class="c-sel"><col class="c-hrs"><col class="c-amt"><col class="c-amt"><col class="c-amt">').join("")}${n > 1 ? '<col class="c-amt">' : ""}</colgroup>`;
   const mgKey = r.mutterschutz && ["gkv", "privat"].includes(r.mutterschutz.status)
@@ -662,7 +678,7 @@ function planner(r) {
   const errs = p.errors.map((e) => `<li><span class="dot not_met"></span>${esc(e)}</li>`).join("");
   const notes = p.notes.map((e) => `<li><span class="dot conditional"></span>${esc(e)}</li>`).join("");
 
-  return `<div class="card planner"><h2>Plan Elterngeld and Elternzeit</h2>
+  return `<div class="card planner" id="plan"><h2>Plan Elterngeld and Elternzeit</h2>
     <p class="hint">Pick a starting point, then change single months and the hours you work. Salary is calculated from your gross pay and contract hours; Elterngeld in months with work uses the average income of all Basis months, or of all Plus and Bonus months, with work (§ 2 Abs. 3 BEEG). 1 Basis month = 2 Plus months.</p>
     <div class="presets">${presets}</div>
     ${errs || notes ? `<ul class="checks">${errs}${notes}</ul>` : ""}
@@ -699,6 +715,11 @@ function hoursFromResult() {
 
 $("#plan-section").addEventListener("change", (e) => {
   if (!window.__lastResult) return;
+  if (e.target.id === "kez-parent") {
+    currentKez = Number(e.target.value);
+    runAnalysis({ keepScroll: true });
+    return;
+  }
   const sel = e.target.closest("select[data-lm]");
   const hrs = e.target.closest("input.hrs");
   const i = Number((sel || hrs)?.dataset.parent);
@@ -716,6 +737,14 @@ $("#plan-section").addEventListener("change", (e) => {
   runAnalysis({ keepScroll: true });
 });
 $("#plan-section").addEventListener("click", (e) => {
+  const kezBtn = e.target.closest("[data-kez]");
+  if (kezBtn) {
+    const sel = $("#kez-parent");
+    if (!sel) return;
+    sel.value = kezBtn.dataset.kez;
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    return;
+  }
   const add = e.target.closest("[data-bonus-start]");
   if (add && window.__lastResult) {
     const p = window.__lastResult.plan;
@@ -740,6 +769,128 @@ $("#plan-section").addEventListener("click", (e) => {
   }
 });
 
+// ---------- vacation, pension, health insurance -------------------------------
+const fmtNum = (x, d = 2) => Number(x).toLocaleString("de-DE", { minimumFractionDigits: d, maximumFractionDigits: d });
+const lmRange = (a, b) => (a === b ? `Month ${a}` : `Months ${a}–${b}`);
+
+function vacationCard(r) {
+  const v = r.social.vacation;
+  if (!v.length) {
+    return `<div class="card social" id="vacation"><h2>Vacation days</h2><p class="hint">Enter "Vacation days per year" for each parent in the form to see how Elternzeit affects them.</p></div>`;
+  }
+  const parts = v.map((x) => {
+    const rows = x.years.map((y) => `<tr><td>${y.year}</td><td class="num">${y.entitlement}</td>
+      <td>${y.full_months ? `${y.full_months}<small>${y.months.join(", ")}</small>` : "0"}</td>
+      <td class="num">${Number(y.max_reduction) ? `−${fmtNum(y.max_reduction)}` : "0"}</td>
+      <td class="num"><strong>${fmtNum(y.remaining_if_reduced)}</strong></td>
+      <td>${y.part_time_months.length ? `<small>${y.part_time_months.join(", ")}</small>` : "–"}</td></tr>`).join("");
+    return `<h3>${esc(x.label)}</h3>
+      ${rows ? `<div class="table-scroll"><table class="vac"><thead><tr><th>Year</th><th class="num">Days</th><th>Full months of Elternzeit without work</th><th class="num">Max. reduction</th><th class="num">Left at worst</th><th>Part-time months (no reduction)</th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : '<p class="hint">No Elternzeit in this plan – no change to the vacation days.</p>'}
+      ${x.civil_servant ? '<p class="hint">Civil servants: the leave regulations of the Bund or Land apply instead of § 17 BEEG.</p>' : ""}`;
+  }).join("");
+  return `<div class="card social" id="vacation"><h2>Vacation days</h2>
+    <p class="hint">Mutterschutz never reduces vacation (§ 24 MuSchG). During Elternzeit the employer <em>may</em> cut 1/12 of the annual leave for each <strong>full calendar month</strong> without work – only by an explicit declaration to you, and never for months in which you work part-time for that employer (§ 17 BEEG; BAG 19.03.2019 – 9 AZR 362/18). Unused leave from before is kept and can be taken afterwards (§ 17 Abs. 2).</p>
+    ${parts}
+    <p class="hint">"Left at worst" assumes the employer declares the full reduction. How fractions of days are rounded depends on your contract or collective agreement.</p></div>`;
+}
+
+function pensionCard(r) {
+  const p = r.social.pension;
+  const options = r.parents.map((x, i) => `<option value="${i}"${i === p.kez_parent ? " selected" : ""}>${esc(x.label)}</option>`).join("");
+  const rows = p.parents.map((x, i) => x.status === "beamt"
+    ? `<tr><th>${esc(x.label)}</th><td colspan="6">Civil servant: no statutory pension; child-raising is credited under civil-service pension rules (Kindererziehungszuschlag).</td></tr>`
+    : `<tr><th><span class="who" style="--c:${PARENT_COLORS[i]}"></span>${esc(x.label)}</th>
+      <td class="num">${fmtNum(x.points_without_child, 4)}</td>
+      <td class="num">${fmtNum(x.points_from_salary, 4)}</td>
+      <td class="num">${Number(x.points_kez) ? `+${fmtNum(x.points_kez, 4)}` : "–"}${Number(x.points_kez) && x.points_kez !== x.points_kez_uncapped ? "<small>capped at the ceiling</small>" : ""}</td>
+      <td class="num"><strong>${fmtNum(x.points_total, 4)}</strong></td>
+      <td class="num ${Number(x.difference) >= 0 ? "pos" : "neg"}">${Number(x.difference) >= 0 ? "+" : ""}${fmtNum(x.difference, 4)}</td>
+      <td class="num ${Number(x.difference) >= 0 ? "pos" : "neg"}">${Number(x.difference) >= 0 ? "+" : ""}${eur(x.pension_per_month_difference)}</td></tr>`).join("");
+  const window = p.parents.find((x) => x.window)?.window || "";
+  const estimated = [...new Set(p.parents.flatMap((x) => x.estimated_years || []))];
+  return `<div class="card social" id="pension"><h2>Pension points</h2>
+    <p class="hint">Points for the statutory pension from Mutterschutz until the end of the 36 months of Kindererziehungszeit (${esc(window)}), compared with working your contract hours without a child. Kindererziehungszeit adds 0,0833 points per month for 36 months from the month after birth, on top of points from salary up to the contribution ceiling (§§ 56, 70 SGB VI). Elterngeld and Mutterschaftsgeld themselves carry no pension contributions; Mutterschutz counts as Anrechnungszeit (§ 58).</p>
+    <label class="field kez"><span class="t">Kindererziehungszeit credited to</span><small>default: the mother; the other parent only by joint declaration to the Deutsche Rentenversicherung (§ 56 Abs. 2)</small><select id="kez-parent">${options}</select></label>
+    <div class="table-scroll"><table><thead><tr><th></th><th class="num">Without child</th><th class="num">From salary</th><th class="num">Kindererziehungszeit</th><th class="num">With child</th><th class="num">Difference</th><th class="num">Pension / month</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="hint">1 point = ${eur(p.rentenwert)} monthly pension (aktueller Rentenwert from 01.07.2026), shown in today's value. Average earnings: 2026 provisional, 2027 cabinet decision${estimated.length ? `; ${estimated.join(", ")} estimated with 2027 figures` : ""}. Months after the plan count as back at work with the hours in the table.</p></div>`;
+}
+
+function healthCard(r) {
+  const h = r.social.health;
+  const art = { gkv_pflicht: "statutory, compulsory", gkv_freiwillig: "statutory, voluntary", privat: "private" };
+  const parts = h.parents.map((x, i) => `<h3><span class="who" style="--c:${PARENT_COLORS[i]}"></span>${esc(x.label)} <small class="hint">${art[x.kv_art]}</small></h3>
+    <div class="table-scroll"><table class="phases"><tbody>${x.phases.map((ph) => `<tr class="hp-${ph.status}"><td>${lmRange(ph.from_lm, ph.to_lm)}</td><td>${esc(ph.text)}</td><td class="num">${ph.per_month === null ? "–" : `${eur(ph.per_month)} / month`}</td></tr>`).join("")}</tbody></table></div>`).join("");
+  const pv = h.pv_childless_ends_for.length ? `<p class="hint">The 0,6 % childless surcharge to care insurance ends with the birth for ${h.pv_childless_ends_for.map((x) => esc(x.label)).join(" and ")} (§ 55 Abs. 3 SGB XI); from the second child the rate falls by 0,25 points per child under 25.</p>` : "";
+  return `<div class="card social" id="health"><h2>Health insurance and the child</h2>
+    <p class="hint">Compulsorily insured members stay insured without contributions while receiving Mutterschaftsgeld or Elterngeld and during Elternzeit (§§ 192, 224 SGB V). Voluntary members pay at least the minimum contribution unless they can join the spouse's family insurance. Private premiums continue; the employer subsidy is only paid on salary. Amounts are the employee's own share, estimated with the average Zusatzbeitrag.</p>
+    ${parts}
+    <h3>The child</h3><p class="child-status ${esc(h.child.status)}">${esc(h.child.text)}</p>
+    ${pv}</div>`;
+}
+
+const CLASS_NAME = { IV_FAKTOR: "IV with Faktor" };
+const className = (k) => CLASS_NAME[k] || k;
+
+function choicesCard(r) {
+  const s = r.social;
+  const label = (i) => esc(r.parents[i].label);
+  const dot = (i) => `<span class="who" style="--c:${PARENT_COLORS[i]}"></span>`;
+
+  // Kindererziehungszeit
+  let kez = "";
+  const k = s.kez_advice;
+  if (k) {
+    const chosen = s.pension.kez_parent;
+    const rows = k.options.map((o) => `<tr${o.parent === k.suggested ? ' class="best"' : ""}><th>${dot(o.parent)}${label(o.parent)}</th>
+      <td class="num">${fmtNum(o.kez_points, 4)}</td><td class="num">${fmtNum(o.household_points, 4)}</td><td class="num">${eur(o.household_pension_per_month)}</td></tr>`).join("");
+    const verdict = k.tie
+      ? `Either parent: the household gets the same points. By default it goes to the mother.`
+      : `Credit it to ${label(k.suggested)}: about ${eur(k.margin_per_month)} more monthly pension for the household (${fmtNum(k.margin_points, 4)} points).`;
+    kez = `<section class="choice"><h3>Kindererziehungszeit – for the pension</h3>
+      <p class="pick">${verdict}${!k.tie && chosen !== k.suggested ? ` <button type="button" class="link" data-kez="${k.suggested}">Show this in the pension card</button>` : ""}</p>
+      <div class="table-scroll"><table class="choice-table"><thead><tr><th>Credited to</th><th class="num">Its points</th><th class="num">Household points</th><th class="num">Household pension / month</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="hint">Points from Kindererziehungszeit are capped at the contribution ceiling together with salary, so they are worth less to a high earner who keeps working. The credit goes to the mother unless you both declare otherwise to the Deutsche Rentenversicherung; the declaration counts for future months and up to 2 months back (§ 56 Abs. 2 SGB VI). The Kinderberücksichtigungszeit up to age 10 follows the same choice (§ 57).${k.excluded.length ? ` ${k.excluded.map(esc).join(", ")} cannot get it as a civil servant (§ 56 Abs. 4).` : ""} The points belong to that parent personally.</p></section>`;
+  }
+
+  // child's health insurance
+  const c = s.child_insurance;
+  const health = `<section class="choice"><h3>The child's health insurance</h3>
+    <p class="pick">${c.suggested === null || c.suggested === undefined ? "" : dot(c.suggested)}${esc(c.text)}</p>
+    <p class="hint">Who receives the Kindergeld changes nothing for pension or health insurance. The childless surcharge to care insurance ends for every statutory-insured parent of the child either way (§ 55 Abs. 3 SGB XI).</p></section>`;
+
+  // tax class
+  const t = s.tax_class;
+  let tax;
+  if (!t.applicable) {
+    tax = `<section class="choice"><h3>Tax class</h3><p class="pick">Nothing to choose: tax classes III, IV and V are only for married couples and registered partners. Unmarried parents stay in class I; a single parent living alone with the child gets class II (relief for single parents, § 24b EStG).</p></section>`;
+  } else {
+    const best = t.options.find((o) => o.classes.join() === t.best.join());
+    const rows = t.options.map((o) => `<tr${o === best ? ' class="best"' : ""}><th>${r.parents.map((_, i) => `${dot(i)}${className(o.classes[i])}`).join(" / ")}${o.current ? " <small>now</small>" : ""}</th>
+      <td class="num">${eur(o.elterngeld_total)}</td>
+      <td class="num ${Number(o.difference) > 0 ? "pos" : Number(o.difference) < 0 ? "neg" : ""}">${o.current ? "–" : `${Number(o.difference) > 0 ? "+" : ""}${eur(o.difference)}`}</td>
+      <td class="num">${eur(o.net_pay_now_per_month)}</td></tr>`).join("");
+    const deadline = t.deadline ? new Date(t.deadline).toLocaleDateString("de-DE") : null;
+    const verdict = t.keep_current
+      ? "Keep your current classes: no other combination raises the Elterngeld for this month plan."
+      : t.too_late
+        ? `${r.parents.map((_, i) => `${label(i)} ${className(best.classes[i])}`).join(" / ")} would have brought ${eur(best.difference)} more Elterngeld, but the deadline (${deadline}) has passed for this child.`
+        : `Switch to ${r.parents.map((_, i) => `${label(i)} ${className(best.classes[i])}`).join(" / ")}: ${eur(best.difference)} more Elterngeld for this month plan. Apply to the Finanzamt by ${deadline}.`;
+    tax = `<section class="choice"><h3>Tax class – for the Elterngeld</h3>
+      <p class="pick">${verdict}</p>
+      <div class="table-scroll"><table class="choice-table"><thead><tr><th>Classes</th><th class="num">Elterngeld, this plan</th><th class="num">Difference</th><th class="num">Net pay now / month</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="hint">Elterngeld uses the class held in most of the 12 months before birth (Mutterschutz months excluded), so the parent who takes more Elterngeld months gains from class III (§ 2c Abs. 3 BEEG). The total income tax for the year stays the same: III/V only shifts it between the payslips and makes a tax return mandatory. "Net pay now" is the household's estimated take-home pay per month before the birth. After the birth the class no longer changes the Elterngeld, so you can switch to whatever suits your cash flow – but Elterngeld raises the tax rate on other income (§ 32b EStG), so expect a back-payment with the tax return.${t.plan_valid ? "" : " The month plan has errors, so these totals are provisional."}</p></section>`;
+  }
+  return `<div class="card social choices" id="choices"><h2>Who takes what</h2>
+    <p class="hint">Suggestions based on your numbers and the month plan above. They change when you change the plan.</p>
+    ${kez}${health}${tax}</div>`;
+}
+
+function socialCards(r) {
+  if (!r.social) return "";
+  return vacationCard(r) + pensionCard(r) + healthCard(r) + choicesCard(r);
+}
+
 const GROUPS = [
   ["eligibility", "How to get below the income cap"],
   ["amount", "How to get more Elterngeld"],
@@ -763,7 +914,62 @@ function recs(r) {
 
 function render(r) {
   window.__lastResult = r;
-  $("#plan-section").innerHTML = planner(r);
-  $("#results").innerHTML = verdict(r) + amounts(r) + mutterschutz(r) + `<p class="plan-link"><a href="#plan-section">Plan months, hours and Elternzeit below</a></p>` + recs(r) +
+  $("#plan-section").innerHTML = planner(r) + socialCards(r);
+  $("#results").innerHTML = verdict(r) + amounts(r) + mutterschutz(r) + `<p class="plan-link"><a href="#plan">Plan months, hours and Elternzeit below</a></p>` + recs(r) +
     `<p class="hint">Calculated with the official BMF Lohnsteuer program ${r.scope.tax_year_before_birth}, average KV-Zusatzbeitrag ${String(r.scope.kv_zusatzbeitrag_used_pct).replace(".", ",")} %. This is not legal or tax advice; the Elterngeldstelle decides.</p>`;
+  refreshNav();
 }
+
+/* ---------- top navigation: available sections and scroll spy ---------- */
+const navLinks = $$(".topnav-links a");
+function markCurrentSection() {
+  const live = navLinks.filter((a) => !a.hasAttribute("aria-disabled"));
+  const atBottom = innerHeight + scrollY >= document.documentElement.scrollHeight - 4;
+  // on wide screens the result column is sticky beside the form: both count as one section
+  const sideBySide = getComputedStyle($("#results")).position === "sticky";
+  const top = (a) => document.getElementById(sideBySide && a.hash === "#results" ? "form" : a.hash.slice(1)).getBoundingClientRect().top;
+  const line = Math.max(120, innerHeight * 0.3);
+  const passed = live.filter((a) => top(a) <= line);
+  const current = atBottom && scrollY > 0 ? live.at(-1) : passed.at(-1) || live[0];
+  const pair = sideBySide && ["#form", "#results"].includes(current?.hash) ? ["#form", "#results"] : [current?.hash];
+  navLinks.forEach((a) => (pair.includes(a.hash) && live.includes(a) ? a.setAttribute("aria-current", "true") : a.removeAttribute("aria-current")));
+}
+function refreshNav() {
+  navLinks.forEach((a) => {
+    const target = document.getElementById(a.hash.slice(1));
+    const ready = target && (!a.hasAttribute("data-needs-result") || !$(".empty", document.getElementById("results")));
+    a.toggleAttribute("aria-disabled", !ready);
+    a.tabIndex = ready ? 0 : -1;
+  });
+  markCurrentSection();
+}
+let navFrame;
+addEventListener("scroll", () => {
+  cancelAnimationFrame(navFrame);
+  navFrame = requestAnimationFrame(markCurrentSection);
+}, { passive: true });
+$(".topnav-links").addEventListener("click", (e) => {
+  if (e.target.closest("a[aria-disabled]")) e.preventDefault();
+});
+refreshNav();
+
+/* ---------- theme switch: automatic → light → dark ---------- */
+const THEMES = ["auto", "light", "dark"];
+const THEME_NAMES = { auto: "Auto", light: "Light", dark: "Dark" };
+function applyTheme(t) {
+  if (t === "auto") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  const btn = $("#theme-switch");
+  btn.dataset.mode = t;
+  $(".theme-name", btn).textContent = THEME_NAMES[t];
+  btn.setAttribute("aria-label", `Theme: ${THEME_NAMES[t].toLowerCase()}. Switch theme`);
+}
+applyTheme(document.documentElement.dataset.theme || "auto");
+$("#theme-switch").addEventListener("click", () => {
+  const next = THEMES[(THEMES.indexOf($("#theme-switch").dataset.mode) + 1) % THEMES.length];
+  applyTheme(next);
+  try {
+    if (next === "auto") localStorage.removeItem("theme");
+    else localStorage.setItem("theme", next);
+  } catch { /* the choice then lasts for this page view only */ }
+});

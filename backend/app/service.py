@@ -10,7 +10,7 @@ from typing import Any
 
 from . import advisor as A
 from . import params as P
-from .bemessung import Month, bemessungszeitraum, mutterschutz_months_before_birth
+from .bemessung import Month, bemessungszeitraum, mutterschutz_months_before_birth, steuerklassenwechsel_frist
 from .eligibility import Check, Eligibility, Grundvoraussetzungen, Status, check_basics, check_income_cap
 from .elterngeld import (
     ZERO,
@@ -28,6 +28,7 @@ from .models import AnalyseRequest, ParentIn, ZvEPersonIn
 from .mutterschutz import Mutterschaftsgeld, estimate_net_monthly, mutterschaftsgeld
 from .plan import EG_TYPES, MaternityCredit, ParentContext, PlanResult, add_months, evaluate, from_counts
 from .plan import presets as plan_presets
+from . import sozial
 from .zve import ZvEHaushalt, ZvEPerson, schaetze_zve
 
 
@@ -426,8 +427,70 @@ def analyse(req: AnalyseRequest) -> dict:
         "eligibility": eligibility,
         "plan": {**_plan_json(plan), "presets": preset_results},
         "mutterschutz": _maternity_json(req),
+        "social": {**_social_json(req, plan), "tax_class": _tax_class_json(req, outcomes, plan, today)},
         "recommendations": [r.as_dict() for r in recs],
     })
+
+
+def _social_json(req: AnalyseRequest, plan: PlanResult) -> dict:
+    mat = _maternity(req)
+    birthing = mat[0] if mat else None
+    ms_start = mat[1].fristen.start if mat and mat[1].status != "none" else None
+    kez = req.kez_parent if req.kez_parent is not None and req.kez_parent < len(req.parents) else (birthing or 0)
+    children = len(req.siblings) + req.children_expected
+    health = sozial.health(req.parents, plan, req.birth_date, children, req.household, _kv_art)
+    # § 56 Abs. 4 SGB VI: civil servants are excluded from the Kindererziehungszeit
+    candidates = [i for i, p in enumerate(req.parents) if p.erwerbsart != Erwerbsart.BEAMT]
+    by_parent = {i: sozial.pension(req.parents, plan, req.birth_date, i, ms_start, birthing) for i in candidates}
+    return {
+        "vacation": [v for i, p in enumerate(req.parents) if (v := sozial.vacation(p, plan, i, req.birth_date))],
+        "pension": sozial.pension(req.parents, plan, req.birth_date, kez, ms_start, birthing),
+        "health": health,
+        "kez_advice": sozial.kez_advice(by_parent, req.parents, birthing) if len(req.parents) == 2 else None,
+        "child_insurance": sozial.child_insurance_advice(req.parents, _kv_art, req.household, health["child"]),
+        "years": {y: {"note": s.note} for y, s in P.SOCIAL_YEARS.items()},
+    }
+
+
+_COMBOS = [(Steuerklasse.IV, Steuerklasse.IV), (Steuerklasse.III, Steuerklasse.V), (Steuerklasse.V, Steuerklasse.III)]
+
+
+def _tax_class_json(req: AnalyseRequest, outcomes: list[ParentOutcome], plan: PlanResult, today: date) -> dict:
+    """Elterngeld over the current month plan for each tax-class combination (§ 2c Abs. 3 BEEG)."""
+    if req.household != "married" or len(req.parents) != 2:
+        return {"applicable": False}
+    current = tuple(p.steuerklasse for p in req.parents)
+    combos = list(_COMBOS)
+    if current not in combos:
+        combos.insert(0, current)
+    gb = geschwisterbonus_at(req.siblings, req.birth_date)
+    year = min(max(today.year, min(P.TAX_YEARS)), max(P.TAX_YEARS))
+    options = []
+    for combo in combos:
+        alt = outcomes if combo == current else [_parent_outcome(req, p, gb, k) for p, k in zip(req.parents, combo)]
+        alt_plan = plan if combo == current else _plan(req, alt)
+        net_now = sum((estimate_net_monthly(
+            p.average_gross, erwerbsart=p.erwerbsart, steuerklasse=k, faktor=p.faktor, kirchensteuer=p.kirchensteuer,
+            kinderfreibetraege=p.kinderfreibetraege, kv_art=_kv_art(p), children_under_25=len(req.siblings), year=year,
+        ) for p, k in zip(req.parents, combo)), ZERO)
+        options.append({"classes": [k.value for k in combo], "current": combo == current,
+                        "elterngeld_total": alt_plan.household_total, "per_parent": alt_plan.totals,
+                        "net_pay_now_per_month": net_now})
+    base = next(o for o in options if o["current"])["elterngeld_total"]
+    for o in options:
+        o["difference"] = cent(o["elterngeld_total"] - base)
+    best = max(options, key=lambda o: (o["elterngeld_total"], o["current"]))
+    # the switch must be decisive for each parent whose Elterngeld rises (§ 2c Abs. 3 Satz 2 BEEG)
+    current_opt = next(o for o in options if o["current"])
+    gaining = [i for i in range(2) if best["per_parent"][i] > current_opt["per_parent"][i]] or [0, 1]
+    frist = min((steuerklassenwechsel_frist(outcomes[i].bmz) for i in gaining if outcomes[i].bmz),
+                key=lambda f: f.antrag_spaetestens, default=None)
+    return {
+        "applicable": True, "options": options, "best": best["classes"], "keep_current": best["current"],
+        "deadline": frist.antrag_spaetestens if frist else None,
+        "too_late": bool(frist) and today > frist.antrag_spaetestens,
+        "plan_valid": plan.valid,
+    }
 
 
 def _maternity_json(req: AnalyseRequest) -> dict | None:

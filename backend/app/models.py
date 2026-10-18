@@ -52,6 +52,8 @@ class ParentIn(BaseModel):
     kv_art: Literal["gkv_pflicht", "gkv_freiwillig", "privat"] | None = None
     # Net pay per month from the payslip (regular pay) – for Mutterschaftsgeld; estimated if empty
     net_monthly: Money | None = Field(None, ge=0, le=100_000)
+    vacation_days: int | None = Field(None, ge=0, le=60)  # annual leave entitlement
+    private_premium: Money | None = Field(None, ge=0, le=10_000)  # private KV+PV premium per month
     rv_pflichtversichert: bool = True
     part_time_gross: Money | None = Field(None, ge=0, le=100_000)
     part_time_hours: Decimal = Field(Decimal(0), ge=0, le=60)
@@ -147,6 +149,7 @@ class AnalyseRequest(BaseModel):
     timeline: list[list[Literal["none", "basis", "plus", "plus_tz", "bonus", "ez"]]] | None = Field(None, max_length=2)
     # weekly working hours per parent and Lebensmonat (None = default for the month type)
     hours: list[list[Decimal | None]] | None = Field(None, max_length=2)
+    kez_parent: int | None = Field(None, ge=0, le=1)  # who gets the Kindererziehungszeit (§ 56 SGB VI)
     zve: ZvEIn = ZvEIn()
     today: date | None = None
 

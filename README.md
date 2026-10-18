@@ -28,6 +28,18 @@ docker compose run --rm test          # full test suite inside the image
 - **Totals:** per parent and for the household, over the whole Elternzeit period.
 - **Saving:** hours are saved and exported with the plan.
 
+**Vacation, pension and health insurance** (cards below the planner):
+- **Vacation days:** enter the annual leave per parent. Shown per year: full calendar months of Elternzeit without work, the maximum reduction (1/12 per month, only if the employer declares it; never during part-time with that employer), and the days left at worst (§ 17 BEEG, § 24 MuSchG, BAG 9 AZR 362/18).
+- **Pension points:** points from salary vs. working without a child, plus the Kindererziehungszeit (0,0833 points/month for 36 months, capped at the ceiling). You choose which parent gets it; the result is converted to monthly pension at 42,52 € per point (§§ 56, 58, 70 SGB VI).
+- **Health insurance:** per parent and phase, i.e. contribution-free while receiving Mutterschaftsgeld/Elterngeld or on Elternzeit (compulsory members), the minimum contribution for voluntary members, or the private premium with or without employer subsidy. Also shown: the child's family insurance including the § 10 Abs. 3 exception, and the end of the childless surcharge (SGB V, SGB XI).
+
+**Who takes what** (card after health insurance), recalculated from your month plan:
+- **Kindererziehungszeit:** household pension points for each possible parent, with the suggested one (the credit is capped together with salary at the contribution ceiling, so it is worth less to a high earner who keeps working; civil servants are excluded, § 56 Abs. 4 SGB VI).
+- **Child's health insurance:** free family insurance where possible; otherwise private via a civil-servant parent (Beihilfe) or the private insurer's Kindernachversicherung within 2 months of birth (§ 198 VVG).
+- **Tax class:** Elterngeld for IV/IV, III/V and V/III (plus your current class if different) over the current plan, the household net pay per class, and the deadline for the parent who gains (§ 2c Abs. 3 BEEG).
+
+**Navigation and theme:** a sticky bar links to every section and highlights the one you are reading; the theme switch cycles Auto, Light and Dark and remembers your choice. Save, load, export and import sit in a floating dock at the bottom.
+
 **Months used and left:**
 - **Household:** Basis-equivalents used of 12/14, and whether the Partnermonate are unlocked or what's needed to unlock them.
 - **Per parent:** Basis, Plus (and with work), and Partnerschaftsbonus used of 4. "Still possible" shows what is left, e.g. "2 Basis or 4 Plus", and Elternzeit months used of 36.
