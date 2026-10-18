@@ -53,6 +53,17 @@ h2, h3 { line-height: 1.25; }
 .masthead { max-width: 1280px; margin: 0 auto; padding: 40px 24px 8px; }
 .masthead h1 { font-size: 2.6rem; line-height: 1.1; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 12px; color: var(--official); }
 .masthead p { max-width: 68ch; margin: 0; color: var(--muted); }
+.masthead p.disclaimer-short {
+  margin-top: 14px; padding: 10px 14px; border-left: 3px solid var(--amber);
+  background: var(--amber-soft); color: var(--ink); border-radius: var(--radius-sm); font-size: .92rem;
+}
+.masthead p.disclaimer-short a { color: inherit; }
+.disclaimer {
+  max-width: 1280px; margin: 32px auto 0; padding: 24px 24px 48px;
+  border-top: 1px solid var(--rule); color: var(--muted); font-size: .88rem;
+}
+.disclaimer h2 { font-size: 1rem; margin: 0 0 8px; color: var(--ink); }
+.disclaimer p { max-width: 90ch; margin: 0 0 8px; }
 .layout {
   max-width: 1280px; margin: 0 auto; padding: 24px;
   display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 32px; align-items: start;
