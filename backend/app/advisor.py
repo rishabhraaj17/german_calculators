@@ -168,31 +168,43 @@ def eligibility_path(
 
 
 def steuerklassen_recommendation(
-    *, label: str, partner_label: str, bmz: list[Month], today: date,
+    *, label: str, partner_label: str, bmz: list[Month], bmz_early: list[Month], today: date,
     gain_household: Decimal, gain_parent: Decimal, current: str, target: str,
 ) -> Recommendation:
+    """`bmz_early`: the Bemessungszeitraum if the child is born in the calendar month before the
+    expected one – the switch deadline moves one month earlier then."""
     frist = steuerklassenwechsel_frist(bmz)
-    too_late = today > frist.antrag_spaetestens
+    safe = steuerklassenwechsel_frist(bmz_early).antrag_spaetestens
+    latest = frist.antrag_spaetestens
+    too_late = today > latest
     wirksam = f"{frist.wirksam_ab[1]:02d}/{frist.wirksam_ab[0]}"
+    when = (f"File the change by {safe.strftime('%d.%m.%Y')}: then it also holds if the child is born early, in "
+            f"the month before the expected one. If the child arrives as expected, {latest.strftime('%d.%m.%Y')} "
+            "is the latest date." if safe < latest else f"File the change by {latest.strftime('%d.%m.%Y')}.")
     detail = (f"With Steuerklasse {target} instead of {current}, {label}'s Elterngeld-Netto rises. Expected "
               f"Elterngeld gain over your plan: {eur(gain_household)} for the household "
               f"({eur(gain_parent)} for {label}). The new class must apply from {wirksam} at the latest, so that "
               f"it holds in at least {frist.monate_neu} of the 12 months of the Bemessungszeitraum (ties go to "
-              f"the last payslip). File the change by {frist.antrag_spaetestens.strftime('%d.%m.%Y')}.")
+              f"the last payslip). {when}")
+    caveats = [f"{partner_label}'s monthly net pay drops until the annual tax return (mandatory with III/V, "
+               "§ 46 Abs. 2 Nr. 3a EStG); the joint annual tax is unchanged.",
+               "Only for married couples / registered partners.",
+               "Changes after birth do not affect the Elterngeld any more (Richtlinien 2c.3.2.2) – you can "
+               "switch back afterwards."]
     if too_late:
         detail = (f"A switch to Steuerklasse {target} would raise Elterngeld by about {eur(gain_household)}, but "
-                  f"the deadline ({frist.antrag_spaetestens.strftime('%d.%m.%Y')}) has passed for this child.")
+                  f"the deadline ({latest.strftime('%d.%m.%Y')}) has passed for this child.")
+    elif today > safe:
+        caveats.insert(0, f"The safe date ({safe.strftime('%d.%m.%Y')}) has passed: if the child is born early, "
+                          "in an earlier calendar month, the new class no longer holds in enough months.")
     return Recommendation(
         id=f"steuerklasse_{label}", category="amount",
         title=f"Steuerklassenwechsel: {label} {target} / {partner_label} {'V' if target == 'III' else 'III'}",
         detail=detail,
         legal_basis="§ 2c Abs. 3 BEEG, Richtlinien 2c.3.2; § 39 Abs. 6 Satz 3, 5 EStG; BSG 25.06.2009 – B 10 EG 3/08 R",
-        confidence="exact", impact_eur=gain_household, deadline=None if too_late else frist.antrag_spaetestens,
-        caveats=[f"{partner_label}'s monthly net pay drops until the annual tax return (mandatory with III/V, "
-                 "§ 46 Abs. 2 Nr. 3a EStG); the joint annual tax is unchanged.",
-                 "Only for married couples / registered partners.",
-                 "Changes after birth do not affect the Elterngeld any more (Richtlinien 2c.3.2.2) – you can "
-                 "switch back afterwards."],
+        confidence="exact", impact_eur=gain_household,
+        deadline=None if too_late else (safe if today <= safe else latest),
+        caveats=caveats,
     )
 
 

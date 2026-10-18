@@ -60,12 +60,40 @@ def test_health_compulsory_member_free_during_elterngeld():
     assert salary["per_month"] == "337.60"  # 3 200 x (7.3 % + 1.45 %) + 3 200 x 1.8 %
 
 
+def _health(household="married", **kw):
+    r = client.post("/api/analyse", json={**body(**kw), "household": household})
+    assert r.status_code == 200, r.text
+    return r.json()["social"]["health"]["parents"]
+
+
 def test_health_voluntary_member_pays_minimum_contribution():
-    phases = social(anna={"kv_art": "gkv_freiwillig"})["health"]["parents"][0]["phases"]
+    phases = _health("partnership", anna={"kv_art": "gkv_freiwillig"})[0]["phases"]
     assert phases[0]["status"] == "free"  # Mutterschaftsgeld months (§ 224 Abs. 1 Satz 3 SGB V)
-    minimum = next(ph for ph in phases if ph["status"] == "minimum")
+    minimum = next(ph for ph in phases if ph["status"] == "minimum" and ph["from_lm"] >= 3)
     # 2027: 4 130 / 3 x (14.0 % + 2.9 % + 3.6 %) = 282.22
     assert minimum["per_month"] == "282.22"
+
+
+def test_health_voluntary_member_can_switch_to_family_insurance_of_gkv_spouse():
+    # § 10 SGB V: Elterngeld is tax-free (§ 3 Nr. 67 EStG), so it is no Gesamteinkommen
+    phases = _health(anna={"kv_art": "gkv_freiwillig"})[0]["phases"]
+    family = next(ph for ph in phases if ph["status"] == "family")
+    assert family["per_month"] == "0" and "Ben" in family["text"] and "282,22" in family["text"]
+
+
+def test_health_voluntary_member_with_private_spouse_pays_on_half_the_spouse_income():
+    # Beitragsverfahrensgrundsätze Selbstzahler § 2 Abs. 4: half the spouse's income, at most half the BBG
+    phases = _health(anna={"kv_art": "gkv_freiwillig"}, ben={"kv_art": "privat", "monthly_gross": 9000})[0]["phases"]
+    spouse = next(ph for ph in phases if ph["status"] == "spouse_income" and ph["from_lm"] >= 3)
+    # 2027: min(9 000, 76 500 / 12) / 2 = 3 187.50 x 20.5 % = 653.44
+    assert spouse["per_month"] == "653.44"
+
+
+def test_health_voluntary_member_pays_pro_rata_in_partial_mutterschutz_month():
+    phases = _health("partnership", anna={"kv_art": "gkv_freiwillig"})[0]["phases"]
+    # Mutterschutz ends 10.06.2027, LM 2 runs 15.05.–14.06.: 4 of 31 days are contribution-liable
+    lm2 = next(ph for ph in phases if ph["from_lm"] <= 2 <= ph["to_lm"])
+    assert lm2["status"] == "minimum" and lm2["per_month"] == "36.42"
 
 
 def test_child_family_insurance_and_exception():
@@ -118,3 +146,31 @@ def test_tax_class_comparison_matches_existing_recommendation():
 
 def test_tax_class_not_applicable_unmarried():
     assert social(household="partnership")["tax_class"] == {"applicable": False}
+
+
+def test_kinderberuecksichtigungszeit_tops_up_points_until_age_10():
+    # § 70 Abs. 3a SGB VI: + half the salary points (max. 0.0278/month), total capped at 0.0833/month.
+    # Inside the 36 KEZ months the 0.0833 cap is already used. Months 37–119 at 3 200 € (2027 figures):
+    # 0.0833 − 3 200 / 53 452 = 0.02343 per month × 83 months = 1.9450
+    p = social()["pension"]["parents"]
+    anna, ben = p
+    assert abs(float(anna["points_kiberz"]) - 1.9450) < 0.0005
+    assert ben["points_kiberz"] == "0.0000"
+    assert anna["requires_25_years"] is True
+    assert float(anna["difference"]) > float(anna["points_kez"])
+
+
+def test_kinderberuecksichtigungszeit_credit_for_overlapping_children_without_salary():
+    # § 70 Abs. 3a Satz 3 Buchst. b: two children under 10 -> 0.0278/month even without contributions
+    r = client.post("/api/analyse", json=body(anna={"erwerbsart": "keine", "monthly_gross": 0},
+                                              siblings=[{"birth_date": "2024-01-10"}]))
+    anna = r.json()["social"]["pension"]["parents"][0]
+    # sibling turns 10 on 10.01.2034: months 37 (05/2030) .. 01/2034 overlap -> 45 × 0.0278 + birth month
+    assert float(anna["points_kiberz"]) > 1.2
+
+
+def test_vacation_reducible_when_part_time_is_with_another_employer():
+    # § 17 Abs. 1 Satz 2 BEEG protects leave only for part-time work "bei seinem Arbeitgeber"
+    v = {x["label"]: x for x in social(ben={"part_time_other_employer": True})["vacation"]}
+    ben = v["Ben"]["years"][0]
+    assert ben["part_time_months"] == [] and len(ben["months"]) > 1

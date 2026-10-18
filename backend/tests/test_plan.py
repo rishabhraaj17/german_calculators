@@ -126,3 +126,21 @@ def test_hours_limit_only_in_working_months():
     a = ctx("A", 2000, hours=40, nach=1500)
     assert run(tl(a=[(1, 2, "basis"), (3, 6, "plus")]), [a]).valid  # not working in these months
     assert not run(tl(a=[(1, 2, "basis"), (3, 6, "plus_tz")]), [a]).valid
+
+
+def test_partnermonate_need_earned_income_before_birth():
+    # § 4 Abs. 3 Satz 2 BEEG: the 2 extra months need a reduction of earned income in 2 Lebensmonate
+    none = [ParentContext(label=x, amounts=c.amounts, amounts_plain=c.amounts, earned_before=False) for x, c in
+            (("A", ctx("A", 0)), ("B", ctx("B", 0)))]
+    r = run(tl(a=[(1, 12, "basis")], b=[(13, 14, "basis")]), none)
+    assert not r.valid and any("Partnermonate" in e for e in r.errors)
+    assert r.budget["shared_limit"] == 12
+    one_earner = [none[0], ctx("B", 3000)]
+    assert run(tl(a=[(1, 12, "basis")], b=[(13, 14, "basis")]), one_earner).valid
+
+
+def test_single_parent_needs_earned_income_for_14_months():
+    a = ctx("A", 0)
+    alone = [ParentContext(label="A", amounts=a.amounts, amounts_plain=a.amounts, earned_before=False)]
+    r = run(tl(a=[(1, 14, "basis")]), alone, single=True)
+    assert not r.valid

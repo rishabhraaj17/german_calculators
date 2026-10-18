@@ -59,15 +59,12 @@ def bemessungszeitraum(birth: date, ausgeklammert: set[Month]) -> list[Month]:
 
 
 def massgebliches_merkmal(werte_je_monat: list[str]) -> str:
-    """§ 2c Abs. 3 BEEG, Richtlinien 2c.3.2: the value of the last month applies,
-    unless another value applied in more months than every other value."""
+    """§ 2c Abs. 3 BEEG: the value of the last month applies, unless another value applied
+    "in der überwiegenden Zahl der Kalendermonate" – in more than half of the months."""
     if not werte_je_monat:
         raise ValueError("no months with income")
-    last = werte_je_monat[-1]
-    counts = Counter(werte_je_monat)
-    best, best_count = counts.most_common(1)[0]
-    strictly_longest = sum(1 for c in counts.values() if c == best_count) == 1
-    return best if strictly_longest and best != last else last
+    best, best_count = Counter(werte_je_monat).most_common(1)[0]
+    return best if best_count * 2 > len(werte_je_monat) else werte_je_monat[-1]
 
 
 @dataclass(frozen=True)

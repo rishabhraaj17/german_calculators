@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from .eligibility import Aufenthalt
 from .elterngeld import Erwerbsart, Steuerklasse
 
 Money = Decimal
+NonNegMoney = Annotated[Decimal, Field(ge=0, le=10_000_000)]
+CalendarMonth = Annotated[str, Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")]  # "YYYY-MM"
 
 
 class Sibling(BaseModel):
@@ -41,7 +43,7 @@ class ParentIn(BaseModel):
     birthing_parent: bool = False
     erwerbsart: Erwerbsart = Erwerbsart.ANGESTELLT
     monthly_gross: Money | None = Field(None, ge=0, le=100_000)
-    monthly_gross_list: list[Money] | None = None  # 12 months of the Bemessungszeitraum
+    monthly_gross_list: list[NonNegMoney] | None = None  # 12 months of the Bemessungszeitraum
     steuerklasse: Steuerklasse = Steuerklasse.IV
     faktor: Decimal = Field(Decimal(1), gt=0, le=1)
     kirchensteuer: bool = False
@@ -60,6 +62,7 @@ class ParentIn(BaseModel):
     # contractual weekly hours before birth; part-time gross is derived from it if not entered
     weekly_hours: Decimal = Field(Decimal(40), gt=0, le=60)
     part_time_in_basis: bool = False
+    part_time_other_employer: bool = False  # § 17 Abs. 1 Satz 2 BEEG protects leave only with the same employer
     # One-off payments (sonstige Bezüge: 13th salary, holiday/Christmas pay, annual bonus).
     # Excluded from Elterngeld (§ 2c Abs. 1 Satz 2 BEEG) but part of the zvE for the income cap.
     bonuses_annual: Money = Field(Decimal(0), ge=0, le=10_000_000)  # in the calendar year before birth
@@ -67,7 +70,8 @@ class ParentIn(BaseModel):
     # Employee salary conversion into a company pension (Direktversicherung, Pensionskasse,
     # Pensionsfonds) per month. `monthly_gross` is the gross BEFORE this conversion.
     bav_monthly: Money = Field(Decimal(0), ge=0, le=100_000)
-    extra_excluded_months: list[str] = Field(default_factory=list)  # "YYYY-MM"
+    extra_excluded_months: list[CalendarMonth] = Field(default_factory=list, max_length=24)
+    include_mutterschutz_months: bool = False  # § 2b Abs. 1 Satz 3 BEEG: keep them on request
     plan: PlanIn = PlanIn()
     basics: Basics = Basics()
 
@@ -86,7 +90,7 @@ class ParentIn(BaseModel):
     @property
     def part_time(self) -> tuple[Decimal | None, str]:
         """Part-time gross per month while on Elterngeld: entered, or pro rata from the hours."""
-        if self.part_time_gross:
+        if self.part_time_gross is not None:
             return self.part_time_gross, "input"
         if self.part_time_hours > 0 and self.average_gross > 0:
             gross = (self.average_gross * self.part_time_hours / self.weekly_hours).quantize(Decimal("0.01"))
@@ -128,8 +132,11 @@ class ZvEPersonIn(BaseModel):
 
 class ZvEIn(BaseModel):
     mode: Literal["bescheid", "estimate"] = "estimate"
-    bescheid_values: list[Money] = Field(default_factory=list)  # zvE per person (or one joint value)
-    persons: list[ZvEPersonIn] = Field(default_factory=list)
+    bescheid_values: list[NonNegMoney] = Field(default_factory=list, max_length=2)  # zvE per person (or one joint value)
+    # The Bescheid deducts the Freibeträge für Kinder only if they beat Kindergeld (§ 31 EStG);
+    # for the income cap they are always deducted, so subtract them here if the Bescheid did not.
+    bescheid_kfb_abgezogen: bool = True
+    persons: list[ZvEPersonIn] = Field(default_factory=list, max_length=2)
     zusammenveranlagung: bool = False
     kinderfreibetrag_zaehler: Decimal = Field(Decimal(0), ge=0, le=20)
     alleinerziehend: bool = False
@@ -143,7 +150,7 @@ class AnalyseRequest(BaseModel):
     single_parent_4c: bool = False  # § 4c Abs. 1 Nr. 1 (Alleinerziehende) etc.
     children_expected: int = Field(1, ge=1, le=6)
     premature_or_disability: bool = False  # extends Mutterschutz to 12 weeks (§ 3 Abs. 2 MuSchG)
-    siblings: list[Sibling] = Field(default_factory=list)
+    siblings: list[Sibling] = Field(default_factory=list, max_length=15)
     parents: list[ParentIn] = Field(min_length=1, max_length=2)
     # Month plan: per parent one entry per Lebensmonat 1-36 (overrides ParentIn.plan counts)
     timeline: list[list[Literal["none", "basis", "plus", "plus_tz", "bonus", "ez"]]] | None = Field(None, max_length=2)
@@ -152,6 +159,7 @@ class AnalyseRequest(BaseModel):
     kez_parent: int | None = Field(None, ge=0, le=1)  # who gets the Kindererziehungszeit (§ 56 SGB VI)
     zve: ZvEIn = ZvEIn()
     today: date | None = None
+    _memo: dict = PrivateAttr(default_factory=dict)  # values the service derives once per request
 
     @model_validator(mode="after")
     def _consistency(self) -> "AnalyseRequest":

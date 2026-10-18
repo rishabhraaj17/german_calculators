@@ -82,6 +82,11 @@ class ZvEErgebnis:
         return {k: (str(v) if isinstance(v, Decimal) else v) for k, v in asdict(self).items()}
 
 
+def freibetraege_fuer_kinder(zaehler: Decimal, ty: P.TaxYear) -> Decimal:
+    """§ 32 Abs. 6 EStG; for § 1 Abs. 8 BEEG always deducted (§ 2 Abs. 5 Satz 2 EStG, Richtlinien 1.8)."""
+    return zaehler * 2 * (ty.kinderfreibetrag_per_parent + ty.bea_freibetrag_per_parent)
+
+
 def _altersvorsorge_cap(p: ZvEPerson, ty: P.TaxYear) -> Decimal:
     """§ 10 Abs. 3 Satz 1, 3 EStG: Höchstbetrag, reduced for civil servants etc."""
     cap = ty.altersvorsorge_hoechstbetrag
@@ -148,7 +153,7 @@ def schaetze_zve(h: ZvEHaushalt) -> ZvEErgebnis:
     uebrige = max(uebrige, pausch)
 
     agb = sum((p.aussergewoehnliche_belastungen for p in h.personen), ZERO)
-    kinder = h.kinderfreibetrag_zaehler * 2 * (ty.kinderfreibetrag_per_parent + ty.bea_freibetrag_per_parent)
+    kinder = freibetraege_fuer_kinder(h.kinderfreibetrag_zaehler, ty)
 
     zve = max(gde - altersvorsorge - kv_pv - uebrige - agb - kinder, ZERO)
     hinweise.append(

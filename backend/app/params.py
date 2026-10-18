@@ -28,11 +28,11 @@ SV_RATE_RV = D("0.10")  # § 2f Abs. 1 Nr. 2
 SV_RATE_ALV = D("0.02")  # § 2f Abs. 1 Nr. 3
 KIRCHENSTEUER_RATE = D("0.08")  # § 2e Abs. 5
 
-# Mini-/Midijob parameters. The official BMFSFJ Elterngeldrechner deliberately
-# pins these to their 2024-01-01 values (see its brutto-netto-rechner.ts,
-# FIXED_ZEITPUNKT_FOR_HISTORIC_PARAMETERS). We mirror that for parity and flag
-# results in this income range as approximations.
-GERINGFUEGIGKEITSGRENZE = D(538)
+# Midijob parameters (§ 2f Abs. 2 BEEG, § 20 Abs. 2, 2a SGB IV). F is not the SV
+# year's factor but follows from the BEEG flat rates: 28 % / (2 × 21 %) = 0,6667.
+# The Geringfügigkeitsgrenze is per tax year (TaxYear below). NOTE: the official
+# BMFSFJ calculator still pins it to 538 € (01.01.2024) as an admitted stopgap
+# (brutto-netto-rechner.ts, FIXED_ZEITPUNKT_FOR_HISTORIC_PARAMETERS).
 UEBERGANGSBEREICH_OBERGRENZE = D(2000)
 UEBERGANGSBEREICH_F_FAKTOR = D("0.6667")
 
@@ -50,6 +50,7 @@ class TaxYear:
     bbg_rv: D  # Beitragsbemessungsgrenze allg. RV (as used in the PAP: BBGRV / BBGRVALV)
     rv_rate_total: D  # allg. RV Beitragssatz (AN + AG), PAP RVSATZAN * 2
     bbg_kv: D  # Beitragsbemessungsgrenze KV/PV (PAP BBGKVPV)
+    geringfuegigkeitsgrenze: D  # § 8 Abs. 1a SGB IV (minimum wage × 130 / 3, rounded up)
 
 
 TAX_YEARS: dict[int, TaxYear] = {
@@ -63,6 +64,7 @@ TAX_YEARS: dict[int, TaxYear] = {
         bbg_rv=D(96600),  # PAP 2025 BBGRV
         rv_rate_total=D("0.186"),  # PAP 2025 RVSATZAN 0.093
         bbg_kv=D(66150),  # PAP 2025 BBGKVPV
+        geringfuegigkeitsgrenze=D(556),  # minimum wage 12,82 €
     ),
     2026: TaxYear(
         year=2026,
@@ -76,6 +78,7 @@ TAX_YEARS: dict[int, TaxYear] = {
         bbg_rv=D(101400),  # PAP 2026 BBGRVALV
         rv_rate_total=D("0.186"),  # PAP 2026 RVSATZAN 0.093
         bbg_kv=D(69750),  # PAP 2026 BBGKVPV
+        geringfuegigkeitsgrenze=D(603),  # minimum wage 13,90 €
     ),
 }
 
@@ -140,6 +143,8 @@ def social_year(year: int) -> SocialYear:
 RENTENWERT = D("42.52")  # aktueller Rentenwert from 01.07.2026 (Rentenwertbestimmungsverordnung 2026)
 KEZ_EP_PER_MONTH = D("0.0833")  # § 70 Abs. 2 SGB VI
 KEZ_MONTHS = 36  # § 56 Abs. 5 SGB VI
+KIBERZ_MONTHS = 120  # § 57 SGB VI: Kinderberücksichtigungszeit until the 10th birthday
+KIBERZ_EP_MAX = D("0.0278")  # § 70 Abs. 3a Satz 3 SGB VI
 KV_GENERAL = D("0.146")  # § 241 SGB V
 KV_REDUCED = D("0.140")  # § 243 SGB V (no Krankengeld entitlement)
 PV_TOTAL = D("0.036")  # § 55 Abs. 1 SGB XI

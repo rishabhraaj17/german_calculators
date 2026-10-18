@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -258,3 +259,106 @@ def test_no_work_during_mutterschutz():
     r = client.post("/api/analyse", json={**HOURS_BODY, "hours": _hours(a={1: 20})}).json()["plan"]
     assert r["rows"][0]["parents"][0]["hours"] == "0"
 
+
+
+def _quick_zve(kv_art, **extra):
+    body = {**COUPLE, "parents": [{**p, "monthly_gross": 7500, "kv_art": kv_art, **extra} for p in COUPLE["parents"]]}
+    return client.post("/api/analyse", json=body).json()["income_cap"]
+
+
+def test_quick_zve_deducts_voluntary_gkv_contributions():
+    # voluntary members pay the same employee share as compulsory members (§ 10 Abs. 1 Nr. 3 EStG)
+    pflicht, freiwillig = _quick_zve("gkv_pflicht"), _quick_zve("gkv_freiwillig")
+    assert freiwillig["zve_total"] == pflicht["zve_total"]
+
+
+def test_quick_zve_deducts_private_premium_minus_employer_subsidy():
+    without = _quick_zve("privat")
+    with_premium = _quick_zve("privat", private_premium=800)
+    # 800 €/month premium, employer pays half (below the § 257 cap): 400 × 12 = 4 800 € own share per person;
+    # above the 1 900 € cap the basic cover is deducted in full and crowds out the ALV contributions
+    assert with_premium["detail"]["kranken_pflege_sonstige_vorsorge"] == "9600"
+    assert int(with_premium["zve_total"]) < int(without["zve_total"])
+    assert any("private premium" in h for h in without["detail"]["hinweise"])
+
+
+def test_bescheid_zve_reduced_by_kinderfreibetraege_if_not_yet_deducted():
+    # Kindergeld was more favourable, so the Bescheid did not deduct the Freibeträge für Kinder;
+    # for § 1 Abs. 8 BEEG they are always deducted (Richtlinien 1.8): 2 × (3 414 + 1 464) = 9 756 € in 2026
+    zve = {"mode": "bescheid", "bescheid_values": [180000], "kinderfreibetrag_zaehler": 1}
+    as_is = client.post("/api/analyse", json={**COUPLE, "zve": zve}).json()["income_cap"]
+    reduced = client.post("/api/analyse", json={**COUPLE, "zve": {**zve, "bescheid_kfb_abgezogen": False}}).json()
+    assert as_is["zve_total"] == "180000" and as_is["check"]["status"] == "not_met"
+    assert reduced["income_cap"]["zve_total"] == "170244"
+    assert reduced["income_cap"]["check"]["status"] == "met"
+
+
+def test_steuerklasse_deadline_has_buffer_for_early_birth():
+    # nobody gives birth in this household's data -> no Mutterschutz exclusion; BMZ 06/2026–05/2027.
+    # Latest switch: effective 12/2026 (6 of 12 months). If the child arrives in May, the BMZ moves
+    # to 05/2026–04/2027 and the switch must already apply from 11/2026.
+    parents = [{**p, "birthing_parent": False} for p in COUPLE["parents"]]
+    r = client.post("/api/analyse", json={**COUPLE, "parents": parents}).json()
+    sk = next(x for x in r["recommendations"] if x["id"] == "steuerklasse_Anna")
+    assert sk["deadline"] == "2026-10-31"
+    assert "30.11.2026" in sk["detail"] and "early" in sk["detail"]
+    assert r["social"]["tax_class"]["deadline"] == "2026-10-31"
+    assert r["social"]["tax_class"]["deadline_latest"] == "2026-11-30"
+
+    late = client.post("/api/analyse", json={**COUPLE, "parents": parents, "today": "2026-11-10"}).json()
+    sk = next(x for x in late["recommendations"] if x["id"] == "steuerklasse_Anna")
+    assert sk["deadline"] == "2026-11-30" and any("early" in c for c in sk["caveats"])
+
+
+def test_mutterschutz_months_kept_on_request():
+    # § 2b Abs. 1 Satz 3 BEEG: on request the Mutterschutz months are not skipped
+    anna = {**COUPLE["parents"][0], "include_mutterschutz_months": True}
+    r = client.post("/api/analyse", json={**COUPLE, "parents": [anna, COUPLE["parents"][1]]}).json()
+    assert r["parents"][0]["excluded_months"] == []
+    assert r["parents"][0]["bemessungszeitraum"][-1] == "2027-05"
+
+
+def test_explicit_zero_part_time_gross_is_kept():
+    from app.models import ParentIn
+    p = ParentIn(monthly_gross=3000, part_time_hours=20, part_time_gross=0)
+    assert p.part_time == (0, "input")
+
+
+def test_civil_servant_without_kv_art_is_privately_insured():
+    from app.models import ParentIn
+    from app.service import _kv_art
+    assert _kv_art(ParentIn(erwerbsart="beamt", monthly_gross=4000)) == "privat"
+    assert _kv_art(ParentIn(monthly_gross=4000)) == "gkv_pflicht"
+
+
+def test_quick_zve_ignores_flat_taxed_minijob():
+    # § 40a Abs. 2 EStG: pauschal taxed Minijob pay is not part of the zvE
+    body = {**COUPLE, "parents": [{**COUPLE["parents"][0], "erwerbsart": "minijob", "monthly_gross": 500},
+                                  COUPLE["parents"][1]]}
+    only_ben = {**COUPLE, "parents": [{**COUPLE["parents"][0], "erwerbsart": "keine", "monthly_gross": 0},
+                                      COUPLE["parents"][1]]}
+    assert client.post("/api/analyse", json=body).json()["income_cap"]["zve_total"] == \
+        client.post("/api/analyse", json=only_ben).json()["income_cap"]["zve_total"]
+
+
+def test_geschwisterbonus_names_last_month_with_bonus():
+    # sibling born 01.08.2024 turns 3 on 01.08.2027; birth 20.06.2027 -> LM 2 starts 20.07.2027 (sibling 2),
+    # LM 3 starts 20.08.2027 (sibling 3): the bonus is paid through LM 2
+    r = client.post("/api/analyse", json={**COUPLE, "siblings": [{"birth_date": "2024-08-01"}]}).json()
+    gb = next(x for x in r["recommendations"] if x["id"] == "geschwisterbonus")
+    assert "Lebensmonat 2 " in gb["detail"]
+
+
+@pytest.mark.parametrize("patch", [
+    {"parents": [{**COUPLE["parents"][0], "monthly_gross_list": [-100] + [3000] * 11}, COUPLE["parents"][1]]},
+    {"parents": [{**COUPLE["parents"][0], "extra_excluded_months": ["2026-13"]}, COUPLE["parents"][1]]},
+    {"parents": [{**COUPLE["parents"][0], "extra_excluded_months": ["abc"]}, COUPLE["parents"][1]]},
+    {"parents": [{**COUPLE["parents"][0], "extra_excluded_months": ["2026-01"] * 40}, COUPLE["parents"][1]]},
+    {"siblings": [{"birth_date": "2024-01-01"}] * 30},
+    {"zve": {"mode": "bescheid", "bescheid_values": [-5]}},
+    {"zve": {"mode": "bescheid", "bescheid_values": [1, 2, 3]}},
+    {"zve": {"persons": [{}] * 3}},
+])
+def test_input_limits_are_validated(patch):
+    r = client.post("/api/analyse", json={**COUPLE, **patch})
+    assert r.status_code == 422

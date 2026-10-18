@@ -70,9 +70,9 @@ class Steuern:
 
 def steuern(brutto: Decimal, m: Abzugsmerkmale, birth: date) -> Steuern:
     """Abzüge für Steuern per § 2e BEEG using the PAP of the year before birth."""
-    if brutto <= P.GERINGFUEGIGKEITSGRENZE:
-        return Steuern(ZERO, ZERO, ZERO)
     ty = P.tax_year_for_birth(birth)
+    if brutto <= ty.geringfuegigkeitsgrenze:
+        return Steuern(ZERO, ZERO, ZERO)
     pap = load_pap(ty.year)
     faktor = m.steuerklasse == Steuerklasse.IV_FAKTOR
     inputs = {
@@ -104,15 +104,16 @@ def steuern(brutto: Decimal, m: Abzugsmerkmale, birth: date) -> Steuern:
     return Steuern(lst, soli, kist)
 
 
-def _sv_bemessungsgrundlage(brutto: Decimal) -> Decimal:
-    """Midijob conversion per § 2f Abs. 2 Satz 3 BEEG / § 20 Abs. 2a SGB IV."""
-    g, og, f = P.GERINGFUEGIGKEITSGRENZE, P.UEBERGANGSBEREICH_OBERGRENZE, P.UEBERGANGSBEREICH_F_FAKTOR
+def _sv_bemessungsgrundlage(brutto: Decimal, birth: date) -> Decimal:
+    """Midijob conversion per § 2f Abs. 2 BEEG / § 20 Abs. 2a SGB IV, limit of the year before birth."""
+    g = P.tax_year_for_birth(birth).geringfuegigkeitsgrenze
+    og, f = P.UEBERGANGSBEREICH_OBERGRENZE, P.UEBERGANGSBEREICH_F_FAKTOR
     if not (g < brutto <= og):
         return brutto
     return max(cent(f * g + (og / (og - g) - (g / (og - g)) * f) * (brutto - g)), ZERO)
 
 
-def sozialabgaben(brutto: Decimal, m: Abzugsmerkmale) -> Decimal:
+def sozialabgaben(brutto: Decimal, m: Abzugsmerkmale, birth: date) -> Decimal:
     """Abzüge für Sozialabgaben per § 2f BEEG (flat rates)."""
     kv = m.kv_pflichtversichert
     rv = m.rv_pflichtversichert
@@ -121,7 +122,7 @@ def sozialabgaben(brutto: Decimal, m: Abzugsmerkmale) -> Decimal:
         rv = True
     elif m.erwerbsart == Erwerbsart.BEAMT:
         kv = rv = False
-    base = _sv_bemessungsgrundlage(brutto)
+    base = _sv_bemessungsgrundlage(brutto, birth)
     total = ZERO
     if kv:
         total += max(base * P.SV_RATE_KV_PV, ZERO)
@@ -159,7 +160,7 @@ def elterngeld_netto(brutto: Decimal, m: Abzugsmerkmale, birth: date) -> NettoBe
     if m.erwerbsart == Erwerbsart.MINIJOB:
         st, sv = Steuern(ZERO, ZERO, ZERO), ZERO
     else:
-        st, sv = steuern(brutto, m, birth), sozialabgaben(brutto, m)
+        st, sv = steuern(brutto, m, birth), sozialabgaben(brutto, m, birth)
     netto_vor_pauschale = cent(brutto - (st.summe + sv))
     return NettoBerechnung(brutto, st, sv, wkp, max(cent(netto_vor_pauschale - wkp), ZERO))
 
@@ -220,7 +221,7 @@ def ek_nach_geburt(brutto_nach: Decimal, m: Abzugsmerkmale, birth: date) -> Deci
     if m.erwerbsart == Erwerbsart.MINIJOB:
         abz = ZERO
     else:
-        abz = steuern(brutto_nach, m, birth).summe + sozialabgaben(brutto_nach, m)
+        abz = steuern(brutto_nach, m, birth).summe + sozialabgaben(brutto_nach, m, birth)
     return cent(max(cent(max(brutto_nach - wkp, ZERO)) - abz, ZERO))
 
 

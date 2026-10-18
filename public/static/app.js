@@ -115,7 +115,9 @@ function parentPayload(node) {
     part_time_gross: num(v("part_time_gross")),
     part_time_hours: num(v("part_time_hours")) ?? 0,
     weekly_hours: num(v("weekly_hours")) ?? 40,
-    extra_excluded_months: v("extra_excluded_months").value.split(/[\s,;]+/).filter((s) => /^\d{4}-\d{2}$/.test(s)),
+    include_mutterschutz_months: v("include_mutterschutz_months").checked,
+    part_time_other_employer: v("part_time_other_employer").checked,
+    extra_excluded_months: v("extra_excluded_months").value.split(/[\s,;]+/).filter((s) => /^\d{4}-(0[1-9]|1[0-2])$/.test(s)),
     // starting plan before the month planner is used: birthing parent 12 Basis, the other 2
     plan: { basis_months: v("birthing_parent").checked ? (form.single_parent_4c.checked ? 14 : 12) : 2 },
     basics: {
@@ -149,7 +151,10 @@ function buildRequest() {
     alleinerziehend: single && (num(form.kinder_im_haushalt) ?? 0) > 0, // § 24b EStG
     kinder_im_haushalt: num(form.kinder_im_haushalt) ?? 0,
   };
-  if (mode === "bescheid") zve.bescheid_values = [num(form.bescheid_0), single ? null : num(form.bescheid_1)].filter((x) => x !== null);
+  if (mode === "bescheid") {
+    zve.bescheid_values = [num(form.bescheid_0), single ? null : num(form.bescheid_1)].filter((x) => x !== null);
+    zve.bescheid_kfb_abgezogen = form.bescheid_kfb_abgezogen.checked;
+  }
   if (mode === "estimate") {
     const persons = $$(".zve-person").filter((z) => !z.hidden).map(zvePersonPayload);
     // all fields empty -> fall back to the quick estimate instead of a misleading zvE of 0 €
@@ -259,7 +264,7 @@ function fillForm(data) {
   (req.parents || []).slice(0, 2).forEach((p, i) => {
     const node = nodes[i];
     ["label", "birthing_parent", "erwerbsart", "monthly_gross", "bonuses_annual", "bonuses_pending", "bav_monthly", "steuerklasse",
-      "faktor", "kirchensteuer", "kinderfreibetraege", "net_monthly", "vacation_days", "private_premium", "part_time_gross", "part_time_hours", "weekly_hours",
+      "faktor", "kirchensteuer", "include_mutterschutz_months", "part_time_other_employer", "kinderfreibetraege", "net_monthly", "vacation_days", "private_premium", "part_time_gross", "part_time_hours", "weekly_hours",
     ].forEach((k) => setField(node, k, p[k]));
     setField(node, "extra_excluded_months", (p.extra_excluded_months || []).join(", "));
     setField(node, "kv_art", p.kv_art || (p.kv_pflichtversichert === false ? "gkv_freiwillig" : "gkv_pflicht"));
@@ -283,6 +288,7 @@ function fillForm(data) {
   form.zusammenveranlagung.value = z.zusammenveranlagung === false ? "separate" : "joint";
   setField(form, "bescheid_0", z.bescheid_values?.[0] ?? "");
   setField(form, "bescheid_1", z.bescheid_values?.[1] ?? "");
+  form.bescheid_kfb_abgezogen.checked = z.bescheid_kfb_abgezogen !== false;
   const zNodes = $$(".zve-person");
   (z.persons || []).slice(0, 2).forEach((person, i) => {
     $$("input", zNodes[i]).forEach((el) => {
@@ -427,7 +433,7 @@ function amounts(r) {
       ${Number(p.bav_deducted) > 0 ? `<tr><td>Average monthly gross before company pension conversion</td><td class="num">${eur(p.gross_before_bav)}</td></tr>
       <tr><td>− Tax-free company pension conversion (§ 3 Nr. 63 EStG – not counted)</td><td class="num">${eur(p.bav_deducted)}</td></tr>` : ""}
       <tr><td>Elterngeld gross (Steuerbrutto, regular pay)</td><td class="num">${eur(n.brutto)}</td></tr>
-      <tr><td>− Lohnsteuer (PAP ${r.scope.tax_year_before_birth}, Kinderfreibeträge ignored, § 2e Abs. 3)</td><td class="num">${eur(n.steuern.lohnsteuer)}</td></tr>
+      <tr><td>− Lohnsteuer (PAP ${r.scope.tax_year_before_birth}, Kinderfreibeträge ignored, § 2e Abs. 3, 6)</td><td class="num">${eur(n.steuern.lohnsteuer)}</td></tr>
       <tr><td>− Solidaritätszuschlag</td><td class="num">${eur(n.steuern.soli)}</td></tr>
       <tr><td>− Church tax (flat 8 %)</td><td class="num">${eur(n.steuern.kirchensteuer)}</td></tr>
       <tr><td>− Social contributions (flat 9 % / 10 % / 2 %, § 2f)</td><td class="num">${eur(n.sozialabgaben)}</td></tr>
@@ -540,6 +546,7 @@ function budget(r) {
     unlocked: "Both parents claim, so the 2 Partnermonate are unlocked.",
     available: `The last 2 months (Partnermonate) unlock only if ${other ? esc(other.label) : "the other parent"} takes at least 2 months.`,
     not_used: "Nobody claims Elterngeld yet.",
+    unavailable: "No Partnermonate: they need earned income before birth that drops in 2 months, and neither parent had any (§ 4 Abs. 3 BEEG).",
   }[b.partnermonate] || "";
   const left = Number(b.shared_left);
   const shares = b.parents.map((q, i) => `<span class="share"><span class="who" style="--c:${PARENT_COLORS[i]}"></span>${esc(q.label)} ${fmtMonths(q.equivalents_used)}</span>`).join("");
@@ -818,20 +825,21 @@ function pensionCard(r) {
   const p = r.social.pension;
   const options = r.parents.map((x, i) => `<option value="${i}"${i === p.kez_parent ? " selected" : ""}>${esc(x.label)}</option>`).join("");
   const rows = p.parents.map((x, i) => x.status === "beamt"
-    ? `<tr><th>${esc(x.label)}</th><td colspan="6">Civil servant: no statutory pension; child-raising is credited under civil-service pension rules (Kindererziehungszuschlag).</td></tr>`
+    ? `<tr><th>${esc(x.label)}</th><td colspan="7">Civil servant: no statutory pension; child-raising is credited under civil-service pension rules (Kindererziehungszuschlag).</td></tr>`
     : `<tr><th><span class="who" style="--c:${PARENT_COLORS[i]}"></span>${esc(x.label)}</th>
       <td class="num">${fmtNum(x.points_without_child, 4)}</td>
       <td class="num">${fmtNum(x.points_from_salary, 4)}</td>
       <td class="num">${Number(x.points_kez) ? `+${fmtNum(x.points_kez, 4)}` : "–"}${Number(x.points_kez) && x.points_kez !== x.points_kez_uncapped ? "<small>capped at the ceiling</small>" : ""}</td>
+      <td class="num">${Number(x.points_kiberz) ? `+${fmtNum(x.points_kiberz, 4)}` : "–"}</td>
       <td class="num"><strong>${fmtNum(x.points_total, 4)}</strong></td>
       <td class="num ${Number(x.difference) >= 0 ? "pos" : "neg"}">${Number(x.difference) >= 0 ? "+" : ""}${fmtNum(x.difference, 4)}</td>
       <td class="num ${Number(x.difference) >= 0 ? "pos" : "neg"}">${Number(x.difference) >= 0 ? "+" : ""}${eur(x.pension_per_month_difference)}</td></tr>`).join("");
   const window = p.parents.find((x) => x.window)?.window || "";
   const estimated = [...new Set(p.parents.flatMap((x) => x.estimated_years || []))];
   return `<div class="card social" id="pension"><h2>Pension points</h2>
-    <p class="hint">Points for the statutory pension from Mutterschutz until the end of the 36 months of Kindererziehungszeit (${esc(window)}), compared with working your contract hours without a child. Kindererziehungszeit adds 0,0833 points per month for 36 months from the month after birth, on top of points from salary up to the contribution ceiling (§§ 56, 70 SGB VI). Elterngeld and Mutterschaftsgeld themselves carry no pension contributions; Mutterschutz counts as Anrechnungszeit (§ 58).</p>
+    <p class="hint">Points for the statutory pension from Mutterschutz until the end of the 36 months of Kindererziehungszeit (${esc(window)}), compared with working your contract hours without a child. Kindererziehungszeit adds 0,0833 points per month for 36 months from the month after birth, on top of points from salary up to the contribution ceiling (§§ 56, 70 SGB VI). Elterngeld and Mutterschaftsgeld themselves carry no pension contributions; Mutterschutz counts as Anrechnungszeit (§ 58). "Top-up to age 10": until the child's 10th birthday, the parent with the Kindererziehungszeit gets half the points from salary on top (max. 0,0278 per month, or 0,0278 for two children under 10 even without salary), up to 0,0833 per month in total – only with at least 25 years of pension-relevant periods at retirement (§§ 57, 70 Abs. 3a SGB VI). It assumes the pre-birth salary after the plan and older children credited to the same parent.</p>
     <label class="field kez"><span class="t">Kindererziehungszeit credited to</span><small>default: the mother; the other parent only by joint declaration to the Deutsche Rentenversicherung (§ 56 Abs. 2)</small><select id="kez-parent">${options}</select></label>
-    <div class="table-scroll"><table><thead><tr><th></th><th class="num">Without child</th><th class="num">From salary</th><th class="num">Kindererziehungszeit</th><th class="num">With child</th><th class="num">Difference</th><th class="num">Pension / month</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="table-scroll"><table><thead><tr><th></th><th class="num">Without child</th><th class="num">From salary</th><th class="num">Kindererziehungszeit</th><th class="num">Top-up to age 10</th><th class="num">With child</th><th class="num">Difference</th><th class="num">Pension / month</th></tr></thead><tbody>${rows}</tbody></table></div>
     <p class="hint">1 point = ${eur(p.rentenwert)} monthly pension (aktueller Rentenwert from 01.07.2026), shown in today's value. Average earnings: 2026 provisional, 2027 cabinet decision${estimated.length ? `; ${estimated.join(", ")} estimated with 2027 figures` : ""}. Months after the plan count as back at work with the hours in the table.</p></div>`;
 }
 
@@ -889,12 +897,19 @@ function choicesCard(r) {
       <td class="num">${eur(o.elterngeld_total)}</td>
       <td class="num ${Number(o.difference) > 0 ? "pos" : Number(o.difference) < 0 ? "neg" : ""}">${o.current ? "–" : `${Number(o.difference) > 0 ? "+" : ""}${eur(o.difference)}`}</td>
       <td class="num">${eur(o.net_pay_now_per_month)}</td></tr>`).join("");
-    const deadline = t.deadline ? new Date(t.deadline).toLocaleDateString("de-DE") : null;
+    const deDate = (d) => (d ? new Date(d).toLocaleDateString("de-DE") : null);
+    const deadline = deDate(t.deadline);
+    const latest = deDate(t.deadline_latest);
+    const timing = t.early_birth_risk
+      ? ` If the child arrives as expected, ${latest} is the last day – but if it is born early, in an earlier calendar month, the switch may no longer count.`
+      : latest && latest !== deadline
+        ? ` This also covers a birth in the month before the expected one; if the child arrives as expected, ${latest} is the last day.`
+        : "";
     const verdict = t.keep_current
       ? "Keep your current classes: no other combination raises the Elterngeld for this month plan."
       : t.too_late
-        ? `${r.parents.map((_, i) => `${label(i)} ${className(best.classes[i])}`).join(" / ")} would have brought ${eur(best.difference)} more Elterngeld, but the deadline (${deadline}) has passed for this child.`
-        : `Switch to ${r.parents.map((_, i) => `${label(i)} ${className(best.classes[i])}`).join(" / ")}: ${eur(best.difference)} more Elterngeld for this month plan. Apply to the Finanzamt by ${deadline}.`;
+        ? `${r.parents.map((_, i) => `${label(i)} ${className(best.classes[i])}`).join(" / ")} would have brought ${eur(best.difference)} more Elterngeld, but the deadline (${latest}) has passed for this child.`
+        : `Switch to ${r.parents.map((_, i) => `${label(i)} ${className(best.classes[i])}`).join(" / ")}: ${eur(best.difference)} more Elterngeld for this month plan. Apply to the Finanzamt by ${deadline}.${timing}`;
     tax = `<section class="choice"><h3>Tax class – for the Elterngeld</h3>
       <p class="pick">${verdict}</p>
       <div class="table-scroll"><table class="choice-table"><thead><tr><th>Classes</th><th class="num">Elterngeld, this plan</th><th class="num">Difference</th><th class="num">Net pay now / month</th></tr></thead><tbody>${rows}</tbody></table></div>

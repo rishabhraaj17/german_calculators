@@ -74,11 +74,12 @@ The repo deploys without changes: import it in the Vercel dashboard, or run `npx
 
 ### Deviations found in the official calculator (commit `05e1176`)
 
-All three are small (at most 10 cent per month) and were checked against a primary source:
+All four were checked against a primary source. The first three are small (at most 10 cent per month); the fourth only affects gross pay between 538 € and 2.000 € a month:
 
 1. **Faktorverfahren:** the official TypeScript port skips the BMF step `LSTJAHR = (ST × f).setScale(0, ROUND_DOWN)`, so its tax is slightly too high. The BMF calculator agrees with this engine in all 114 disputed cases.
 2. **Floating point:** the official code computes the PAP and the cent rounding with JavaScript floats. Example: 1.375,10 € × 0,65 = 893,815 €. The Richtlinien round half up, which gives 893,82 €; the official code gives 893,81 €.
 3. **KV-Zusatzbeitrag for 2027 births:** the official code still uses the 2025 average of 2,5 %. The Federal Ministry of Health announced **2,9 % for 2026** (BAnz AT 10.11.2025 B7), and this engine uses 2,9 %.
+4. **Geringfügigkeitsgrenze:** the official code pins the Minijob limit to 538 € (01.01.2024) and calls this a temporary compromise in its own comments. This engine uses the limit of the year before birth: 556 € (2025) and 603 € (2026), § 8 Abs. 1a SGB IV. The Midijob factor F = 0,6667 follows from the BEEG flat rates (§ 2f Abs. 2) and is the same in both.
 
 ### Exact and estimated values
 
@@ -88,7 +89,7 @@ All three are small (at most 10 cent per month) and were checked against a prima
   - **Take-home pay** during part-time work.
   - **Health-insurance contributions:** based on the average Zusatzbeitrag.
   - **Pension points after 2027:** use the 2027 figures. The 2027 figures themselves come from the cabinet decision and are not yet final.
-- **Approximated:** Mini- and Midijob parameters mirror the official calculator's fixed 2024 values.
+- **Assumed:** the tax-class deadline is given with a buffer for a birth in the month before the expected one; the pension top-up until age 10 (§ 70 Abs. 3a SGB VI) assumes the pre-birth salary after the plan and needs 25 years of pension-relevant periods.
 
 All legal research, with sources, is in [`docs/RESEARCH.md`](docs/RESEARCH.md).
 

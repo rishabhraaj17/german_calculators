@@ -21,6 +21,7 @@ from decimal import Decimal
 
 from . import params as P
 from .elterngeld import ZERO, Erwerbsart, cent
+from .fmt import eur
 from .plan import EG_TYPES, MAX_LM, add_months, lebensmonat
 
 
@@ -58,7 +59,9 @@ def vacation(parent, plan, i: int, birth: date) -> dict | None:
             if first < b["start"] or last > b["end"]:
                 continue  # only full calendar months count (§ 17 Abs. 1 BEEG)
             lms = range(_lm_of(birth, first), _lm_of(birth, last) + 1)
-            works = any(plan.hours and lm <= MAX_LM and plan.hours[i][lm - 1] > 0 for lm in lms)
+            # § 17 Abs. 1 Satz 2 BEEG: no reduction while working part-time for the same employer
+            works = not parent.part_time_other_employer and any(
+                plan.hours and lm <= MAX_LM and plan.hours[i][lm - 1] > 0 for lm in lms)
             (part_time if works else reducible).append((y, m))
     years = sorted({y for b in blocks for y in range(b["start"].year, b["end"].year + 1)})
     rows = []
@@ -76,7 +79,15 @@ def vacation(parent, plan, i: int, birth: date) -> dict | None:
 
 
 # ---------------------------------------------------------------- pension
-def pension(parents, plan, birth: date, kez_parent: int | None, ms_start: date | None, birthing: int | None) -> dict:
+def _age_at(born: date, at: date) -> int:
+    return at.year - born.year - ((at.month, at.day) < (born.month, born.day))
+
+
+def pension(parents, plan, birth: date, kez_parent: int | None, ms_start: date | None, birthing: int | None,
+            siblings: tuple[date, ...] = ()) -> dict:
+    """Points in the KEZ window, plus the § 70 Abs. 3a top-up during the Kinderberücksichtigungszeit
+    (birth month until the 10th birthday, § 57), which follows the KEZ assignment. After the plan the
+    parent is assumed back at the pre-birth salary, and older siblings' times assigned to the same parent."""
     out = []
     for i, p in enumerate(parents):
         if p.erwerbsart == Erwerbsart.BEAMT:
@@ -85,9 +96,9 @@ def pension(parents, plan, birth: date, kez_parent: int | None, ms_start: date |
         first_c = 0
         if i == birthing and ms_start is not None:
             first_c = -((birth.year - ms_start.year) * 12 + birth.month - ms_start.month)
-        base_ep = actual_ep = kez_ep = kez_capped = ZERO
+        base_ep = actual_ep = kez_ep = kez_capped = kiberz = ZERO
         years_used: set[int] = set()
-        for c in range(first_c, P.KEZ_MONTHS + 1):
+        for c in range(first_c, P.KIBERZ_MONTHS):
             d = add_months(date(birth.year, birth.month, 1), c)
             sy = P.social_year(d.year)
             years_used.add(d.year)
@@ -99,27 +110,38 @@ def pension(parents, plan, birth: date, kez_parent: int | None, ms_start: date |
                 gross = Decimal(plan.rows[c]["parents"][i].get("gross_pay", ZERO))
             else:
                 gross = baseline
-            ep_base = min(baseline, cap) / sy.durchschnittsentgelt
             ep_sal = min(gross, cap) / sy.durchschnittsentgelt
-            base_ep += ep_base
-            actual_ep += ep_sal
-            if kez_parent == i and 1 <= c <= P.KEZ_MONTHS:
-                kez_ep += P.KEZ_EP_PER_MONTH
-                kez_capped += max(min(P.KEZ_EP_PER_MONTH, cap / sy.durchschnittsentgelt - ep_sal), ZERO)
-        total = actual_ep + kez_capped
+            kez_month = ZERO
+            if c <= P.KEZ_MONTHS:
+                base_ep += min(baseline, cap) / sy.durchschnittsentgelt
+                actual_ep += ep_sal
+                if kez_parent == i and c >= 1:
+                    kez_ep += P.KEZ_EP_PER_MONTH
+                    kez_month = max(min(P.KEZ_EP_PER_MONTH, cap / sy.durchschnittsentgelt - ep_sal), ZERO)
+                    kez_capped += kez_month
+            if kez_parent == i and c >= 0:  # § 70 Abs. 3a SGB VI
+                a = min(ep_sal / 2, P.KIBERZ_EP_MAX)
+                other_child = any(_age_at(s, d) < 10 for s in siblings if s <= d)
+                b = P.KIBERZ_EP_MAX - a if other_child else ZERO
+                kiberz += max(min(a + b, P.KEZ_EP_PER_MONTH - ep_sal - kez_month), ZERO)
+        total = actual_ep + kez_capped + kiberz
         q = Decimal("0.0001")
+        month0 = date(birth.year, birth.month, 1)
         out.append({
             "label": p.label, "status": "grv",
-            "window": f"{add_months(date(birth.year, birth.month, 1), first_c).strftime('%m/%Y')}–"
-                      f"{add_months(date(birth.year, birth.month, 1), P.KEZ_MONTHS).strftime('%m/%Y')}",
+            "window": f"{add_months(month0, first_c).strftime('%m/%Y')}–{add_months(month0, P.KEZ_MONTHS).strftime('%m/%Y')}",
+            "kiberz_window": f"{month0.strftime('%m/%Y')}–{add_months(month0, P.KIBERZ_MONTHS - 1).strftime('%m/%Y')}",
             "points_without_child": base_ep.quantize(q),
             "points_from_salary": actual_ep.quantize(q),
             "points_kez": kez_capped.quantize(q),
             "points_kez_uncapped": kez_ep.quantize(q),
+            "points_kiberz": kiberz.quantize(q),
+            "requires_25_years": kiberz > 0,  # § 70 Abs. 3a Satz 1: only with 25 years of rentenrechtliche Zeiten
             "points_total": total.quantize(q),
             "difference": (total - base_ep).quantize(q),
             "pension_per_month_difference": cent((total - base_ep) * P.RENTENWERT),
             "pension_per_month_kez": cent(kez_capped * P.RENTENWERT),
+            "pension_per_month_kiberz": cent(kiberz * P.RENTENWERT),
             "estimated_years": sorted(y for y in years_used if y > max(P.SOCIAL_YEARS)),
         })
     return {"parents": out, "kez_parent": kez_parent, "rentenwert": P.RENTENWERT,
@@ -157,11 +179,32 @@ def health(parents, plan, birth: date, children: int, household: str, kv_art) ->
                         else "Insured without contributions – Elternzeit" if kind == "ez"
                         else "No salary entered for this month")
             elif art == "gkv_freiwillig":
+                spouse = 1 - i if (household == "married" and len(parents) == 2) else None
+                spouse_art = kv_art(parents[spouse]) if spouse is not None else None
+                rate = P.KV_REDUCED + zb + P.PV_TOTAL - P.PV_CHILD_REDUCTION * max(0, min(children, 5) - 1)
+                minimum = sy.bezugsgroesse_month / 3  # 1/90 of the Bezugsgröße per day (§ 240 Abs. 4 SGB V)
+                days = (row["end"] - row["start"]).days + 1
+                liable = Decimal(days - min(cell.get("mutterschutz_days", 0), days)) / days  # § 224 SGB V
                 if mg_full:
                     amount, status, text = ZERO, "free", "No contributions while Mutterschaftsgeld is paid (§ 224 SGB V)"
+                elif spouse_art == "privat":
+                    # Beitragsverfahrensgrundsätze Selbstzahler § 2 Abs. 4: without own income, half the
+                    # income of a spouse outside the GKV counts, at most half the BBG
+                    spouse_gross = Decimal(row["parents"][spouse].get("gross_pay", ZERO))
+                    base = max(minimum, min(spouse_gross, sy.bbg_kv / 12) / 2)
+                    amount = cent(base * rate * liable)
+                    status = "spouse_income" if base > minimum else "minimum"
+                    text = (f"Voluntary member without own income: half of {parents[spouse].label}'s income counts "
+                            "(§ 240 SGB V), paid in full by you" if base > minimum else
+                            "Minimum contribution of voluntary members, paid in full by you (no employer share)")
+                elif spouse_art is not None:
+                    # § 10 SGB V: family insurance has priority; Elterngeld is no Gesamteinkommen (§ 3 Nr. 67 EStG)
+                    amount, status = ZERO, "family"
+                    text = (f"Free family insurance through {parents[spouse].label} (§ 10 SGB V) – end the voluntary "
+                            "membership; Elterngeld doesn't count as income. Otherwise the minimum contribution of "
+                            f"{eur(cent(minimum * rate), True)} a month applies.")
                 else:
-                    base = sy.bezugsgroesse_month / 3  # 1/90 of the Bezugsgröße per day (§ 240 Abs. 4 SGB V)
-                    amount = cent(base * (P.KV_REDUCED + zb + P.PV_TOTAL - P.PV_CHILD_REDUCTION * max(0, min(children, 5) - 1)))
+                    amount = cent(minimum * rate * liable)
                     status = "minimum"
                     text = "Minimum contribution of voluntary members, paid in full by you (no employer share)"
             else:

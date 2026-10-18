@@ -10,6 +10,9 @@ Vectors were produced by running the official source code
 * For births in 2027 the official code still uses the 2025 average
   KV-Zusatzbeitrag (2.5 %) instead of the announced 2.9 % for 2026. The
   parity test applies 2.5 % so that the comparison isolates engine logic.
+* The official code pins the Geringfügigkeitsgrenze to 538 € (01.01.2024) as
+  a self-declared stopgap; the law has 556 € (2025) and 603 € (2026). The
+  parity test applies 538 € for the same reason.
 """
 
 import dataclasses
@@ -38,6 +41,8 @@ STKL = {"I": "I", "II": "II", "III": "III", "IV": "IV", "IV mit Faktor": "IV_FAK
 def official_kvz(monkeypatch):
     patched = dict(P.TAX_YEARS)
     patched[2026] = dataclasses.replace(P.TAX_YEARS[2026], avg_kv_zusatzbeitrag_pct=Decimal("2.5"))
+    for year in patched:
+        patched[year] = dataclasses.replace(patched[year], geringfuegigkeitsgrenze=Decimal(538))
     monkeypatch.setattr(P, "TAX_YEARS", patched)
 
 

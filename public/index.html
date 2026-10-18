@@ -86,8 +86,13 @@
       <label class="field only-two"><span class="t">zvE of Parent B</span><small>only if assessed separately</small><input type="number" name="bescheid_1" min="0" step="1" inputmode="numeric"></label>
     </div>
     <div class="mode mode-estimate" id="zve-persons"></div>
-    <div class="grid mode mode-estimate mode-quick">
+    <div class="grid mode mode-estimate mode-quick mode-bescheid">
       <label class="field"><span class="t">Kinderfreibetrag count</span><small>Zähler for older children; 1.0 per child if married</small><input type="number" name="kinderfreibetrag_zaehler" value="0" min="0" step="0.5"></label>
+    </div>
+    <div class="grid mode mode-bescheid">
+      <label class="check"><input type="checkbox" name="bescheid_kfb_abgezogen" checked><span>The zvE in the Bescheid already deducts the Freibeträge für Kinder <small>untick if Kindergeld was more favourable – the cap always uses the zvE after these Freibeträge (§ 2 Abs. 5 Satz 2 EStG)</small></span></label>
+    </div>
+    <div class="grid mode mode-estimate mode-quick">
       <label class="field only-married"><span class="t">Tax assessment</span><small>as in your tax return</small><select name="zusammenveranlagung"><option value="joint">Joint (Zusammenveranlagung)</option><option value="separate">Separate</option></select></label>
       <label class="field only-single"><span class="t">Older children in household</span><small>in that year; gives the § 24b relief</small><input type="number" name="kinder_im_haushalt" value="0" min="0"></label>
     </div>
@@ -153,6 +158,8 @@
         <label class="field"><span class="t">Hours per week while on Elterngeld</span><small>max. 32; bonus needs 24–32</small><input type="number" name="part_time_hours" value="0" min="0" max="60" step="0.5"></label>
         <label class="field"><span class="t">Part-time gross per month</span><small>empty = calculated from the hours</small><input type="number" name="part_time_gross" min="0" step="0.01"></label>
         <label class="field"><span class="t">Excluded months</span><small>e.g. pregnancy-related illness, as YYYY-MM</small><input name="extra_excluded_months" placeholder="2026-09, 2026-10"></label>
+        <label class="check wide"><input type="checkbox" name="part_time_other_employer"><span>Part-time with another employer <small>then the employer may still cut leave for Elternzeit months (§ 17 Abs. 1 BEEG)</small></span></label>
+        <label class="check wide"><input type="checkbox" name="include_mutterschutz_months"><span>Don't skip the Mutterschutz months <small>on request (§ 2b Abs. 1 Satz 3 BEEG) – only worth it if pay in the older months was lower</small></span></label>
         <label class="field wide"><span class="t">Nationality or residence permit</span><small>§ 1 Abs. 7 BEEG</small><select name="aufenthalt">
           <option value="de_eu_eea_ch">German, EU, EEA or Swiss citizen</option>
           <option value="niederlassung">Niederlassungserlaubnis or Daueraufenthalt-EU</option>

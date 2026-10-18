@@ -30,12 +30,12 @@ Primary sources used (all downloaded and read; no secondary sources for rules):
 - Replacement rate (§ 2 Abs. 2): 67 %. Below 1.000 € it rises by 0,1 pp per 2 € (up to 100 %); above 1.200 € it falls by 0,1 pp per 2 €, down to 65 % from 1.240 €. Min 300 €, max 1.800 €. With income after birth: rate × (min(pre, 2.770 €) − post).
 - ElterngeldPlus (§ 4a): at most half of Basis without income. Min 150 €; bonuses and the multiples supplement are halved.
 - Geschwisterbonus (§ 2a): +10 %, min 75 €, with 1 sibling < 3, or 2 siblings < 6, or a disabled sibling < 14. It ends after the Lebensmonat in which the condition lapses.
-- Bemessungszeitraum (§ 2b): the 12 months before the birth month. Months with Mutterschutz, Elterngeld for an older child (first 14 months) or pregnancy-related illness are skipped.
-- Steuerklasse (§ 2c Abs. 3, Richtlinien 2c.3.2): the class on the last payslip applies, unless another class applied in **more** months. Ties go to the last payslip. A change takes effect from the month after filing (§ 39 Abs. 6 EStG), and filing for the current year is possible until 30.11.
+- Bemessungszeitraum (§ 2b): the 12 months before the birth month. Months with Mutterschutz, Elterngeld for an older child (first 14 months) or pregnancy-related illness are skipped – unless the parent applies to keep them (§ 2b Abs. 1 Satz 3).
+- Steuerklasse (§ 2c Abs. 3, Richtlinien 2c.3.2): the class on the last payslip applies, unless another class applied "in der überwiegenden Zahl der Kalendermonate" – a **majority**, more than 6 of 12. Ties go to the last payslip. A birth in an earlier month than expected moves the Bemessungszeitraum back, so the tool also gives a safe deadline one month earlier. A change takes effect from the month after filing (§ 39 Abs. 6 EStG), and filing for the current year is possible until 30.11.
 
 ## 3. Duration (§§ 4–4c)
 
-12 Basis months + 2 Partnermonate if both parents claim (or single-parent § 4c). Each parent takes at least 2 months and at most 12 (§ 4c: 14). 1 Basis = 2 Plus. Partnerschaftsbonus: 2–4 extra Plus months each, simultaneously, while both work 24–32 h. The Mutterschaftsgeld months of the birthing parent count as Basis months (§ 4 Abs. 4 Satz 3).
+12 Basis months + 2 Partnermonate if both parents claim (or single-parent § 4c) **and** a parent's earned income drops in 2 Lebensmonate (§ 4 Abs. 3 Satz 2) – without any earned income before birth there are no Partnermonate. Each parent takes at least 2 months and at most 12 (§ 4c: 14). 1 Basis = 2 Plus. Partnerschaftsbonus: 2–4 extra Plus months each, simultaneously, while both work 24–32 h. The Mutterschaftsgeld months of the birthing parent count as Basis months (§ 4 Abs. 4 Satz 3).
 
 ## 4. Levers if the cap is exceeded (only lawful ones)
 

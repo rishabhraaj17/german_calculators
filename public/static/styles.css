@@ -519,7 +519,7 @@ button.bonus-add { margin-top: 4px; background: var(--bonus); color: #fff; borde
 .choices .choice-table tr.best th, .choices .choice-table tr.best td { background: var(--official-soft); }
 .choices .choice-table tr.best th { box-shadow: inset 3px 0 0 var(--official); }
 .choices .choice-table th small { color: var(--muted); font-weight: 400; margin-left: 4px; }
-.card.social tr.hp-free td:last-child { color: var(--official); }
+.card.social tr.hp-free td:last-child, .card.social tr.hp-family td:last-child { color: var(--official); }
 .child-status { padding: 10px 14px; border-radius: var(--radius-sm); background: var(--official-soft); margin: 0; }
 .child-status.excluded, .child-status.private { background: var(--amber-soft); }
 .card.social table.vac, .card.social table.phases { table-layout: fixed; min-width: 640px; }

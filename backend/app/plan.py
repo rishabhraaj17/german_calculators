@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import Required, TypedDict
 
 from .elterngeld import ZERO, Monatsbetraege, cent
 
@@ -54,6 +55,27 @@ def mutterschutz_end(birth: date, weeks: int) -> date:
     return birth + timedelta(weeks=weeks)
 
 
+class MonthCell(TypedDict, total=False):
+    """One parent in one Lebensmonat. Optional keys appear only when they apply."""
+
+    type: Required[str]  # one of TYPES
+    amount: Required[Decimal]  # Elterngeld after crediting Mutterschaftsgeld
+    total_net: Required[Decimal]  # Elterngeld + Mutterschaftsgeld + net pay
+    hours: Decimal  # effective weekly hours (salary model only)
+    gross_pay: Decimal  # only in months with pay
+    net_pay: Decimal
+    mutterschutz_days: int  # days covered by the Schutzfrist after birth
+    mutterschaftsgeld: Decimal
+    elterngeld_before_credit: Decimal
+
+
+class MonthRow(TypedDict):
+    lm: int
+    start: date  # first day of the Lebensmonat
+    end: date  # last day
+    parents: list[MonthCell]
+
+
 @dataclass(frozen=True)
 class ParentContext:
     label: str
@@ -63,6 +85,7 @@ class ParentContext:
     part_time_net: Decimal | None = None  # take-home pay per part-time month (for display)
     part_time_in_basis: bool = False
     employee: bool = True  # Elternzeit exists only for employees (§ 15 Abs. 1)
+    earned_before: bool = True  # had earned income before birth (needed for the Partnermonate, § 4 Abs. 3 Satz 2)
     civil_servant: bool = False
     contract_hours: Decimal = Decimal(40)
     # weekly hours -> (gross, net) salary per month; None = no salary model
@@ -78,7 +101,7 @@ class PlanResult:
     timeline: list[list[str]]
     errors: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
-    rows: list[dict] = field(default_factory=list)  # per Lebensmonat
+    rows: list[MonthRow] = field(default_factory=list)  # per Lebensmonat
     months: list[list[dict]] = field(default_factory=list)  # per parent: Elterngeld months only
     totals: list[Decimal] = field(default_factory=list)
     elternzeit: list[dict] = field(default_factory=list)
@@ -96,6 +119,12 @@ class PlanResult:
     @property
     def months_with_elterngeld(self) -> int:
         return sum(1 for r in self.rows if any(p["type"] in EG_TYPES for p in r["parents"]))
+
+
+def partnermonate_possible(parents: list[ParentContext]) -> bool:
+    """§ 4 Abs. 3 Satz 2, § 4c Abs. 1 BEEG: the 2 extra months need earned income that is reduced
+    in 2 Lebensmonate – impossible if no parent had earned income before birth."""
+    return any(p.earned_before for p in parents)
 
 
 def normalise(timeline: list[list[str]], n_parents: int) -> list[list[str]]:
@@ -178,6 +207,7 @@ def _validate(tl: list[list[str]], parents: list[ParentContext], single_parent_4
     errors: list[str] = []
     n = len(tl)
     names = [p.label for p in parents]
+    partner_ok = partnermonate_possible(parents)
 
     def months_of(i: int, *types: str) -> list[int]:
         return [lm for lm in range(1, MAX_LM + 1) if tl[i][lm - 1] in types]
@@ -194,7 +224,7 @@ def _validate(tl: list[list[str]], parents: list[ParentContext], single_parent_4
         b, p, bonus = len(months_of(i, "basis")), len(months_of(i, *PLUS_TYPES)), len(months_of(i, "bonus"))
         if 0 < b + p + bonus < 2:
             errors.append(f"{names[i]}: Elterngeld must be claimed for at least 2 Lebensmonate (§ 4 Abs. 4 Satz 2 BEEG).")
-        per_parent = 14 if single_parent_4c else 12
+        per_parent = 14 if (single_parent_4c and partner_ok) else 12
         if b + Decimal(p) / 2 > per_parent:
             errors.append(f"{names[i]}: {b} Basis + {p} Plus = {b + Decimal(p) / 2:g} Basis-equivalents; max "
                           f"{per_parent} per parent (1 Basis = 2 Plus, § 4 Abs. 3 Satz 3, Abs. 4 Satz 1 / § 4c BEEG).")
@@ -210,10 +240,12 @@ def _validate(tl: list[list[str]], parents: list[ParentContext], single_parent_4
 
     claimants = sum(1 for i in range(n) if months_of(i, *EG_TYPES))
     equivalents = sum(len(months_of(i, "basis")) + Decimal(len(months_of(i, *PLUS_TYPES))) / 2 for i in range(n))
-    shared = 14 if (claimants == 2 or single_parent_4c) else 12
+    shared = 14 if (claimants == 2 or single_parent_4c) and partner_ok else 12
     if equivalents > shared:
         errors.append(f"Together {equivalents:g} Basis-equivalents; max {shared}. The 2 Partnermonate need both "
-                      "parents to claim (§ 4 Abs. 3 Satz 2 BEEG) or single-parent status (§ 4c BEEG).")
+                      "parents to claim (§ 4 Abs. 3 Satz 2 BEEG) or single-parent status (§ 4c BEEG)"
+                      + ("." if partner_ok else ", and earned income before birth that is reduced in 2 "
+                         "Lebensmonate – no parent had earned income."))
 
     late = sorted({lm for i in range(n) for lm in months_of(i, *EG_TYPES) if lm >= 15})
     if late and late != list(range(15, late[-1] + 1)):
@@ -238,10 +270,10 @@ def _validate(tl: list[list[str]], parents: list[ParentContext], single_parent_4
             if not 2 <= len(months) <= 4 or len(_runs(months)) != 1:
                 errors.append(f"{names[i]}: Partnerschaftsbonus must be 2–4 consecutive months (§ 4b Abs. 2, 3 BEEG).")
             if hours is not None:
-                bad = [lm for lm in months if not 24 <= hours[i][lm - 1] <= 32]
-                if bad:
+                short = [lm for lm in months if not 24 <= hours[i][lm - 1] <= 32]
+                if short:
                     errors.append(f"{names[i]}: Partnerschaftsbonus requires 24–32 working hours/week in every bonus "
-                                  f"month (§ 4b Abs. 1 BEEG); check month {', '.join(map(str, bad))}.")
+                                  f"month (§ 4b Abs. 1 BEEG); check month {', '.join(map(str, short))}.")
             else:
                 h = parents[i].part_time_hours
                 if not 24 <= h <= 32:
@@ -281,11 +313,14 @@ def evaluate(
     notes: list[str] = []
     if maternity is None and birthing is not None and mutterschutz_weeks:
         maternity = MaternityCredit(end=mutterschutz_end(birth, mutterschutz_weeks))
-    ms_end = maternity.end if (maternity and birthing is not None) else None
+    if birthing is None:
+        maternity = None
+    ms_end = maternity.end if maternity else None
     forced: list[int] = []
     # § 4 Abs. 4 Satz 3 BEEG: months with creditable Mutterschaftsleistungen count as Basis months
-    if ms_end is not None and (maternity.credited_per_day is None or maternity.credited_per_day > 0):
-        forced = [lm for lm in range(1, MAX_LM + 1) if lebensmonat(birth, lm)[0] <= ms_end]
+    if (maternity is not None and birthing is not None
+            and (maternity.credited_per_day is None or maternity.credited_per_day > 0)):
+        forced = [lm for lm in range(1, MAX_LM + 1) if lebensmonat(birth, lm)[0] <= maternity.end]
         changed = [lm for lm in forced if tl[birthing][lm - 1] != "basis"]
         for lm in forced:
             tl[birthing][lm - 1] = "basis"
@@ -328,12 +363,12 @@ def evaluate(
     for lm in range(1, MAX_LM + 1):
         start, end = lebensmonat(birth, lm)
         gb = gb_active is None or gb_active(lm)
-        row = {"lm": lm, "start": start, "end": end, "parents": []}
+        row: MonthRow = {"lm": lm, "start": start, "end": end, "parents": []}
         for i, p in enumerate(parents):
             kind = tl[i][lm - 1]
             a = p.amounts if gb else p.amounts_plain
             amount = ZERO
-            entry: dict = {"type": kind}
+            entry: MonthCell = {"type": kind, "amount": ZERO, "total_net": ZERO}
             covered = 0
             if i == birthing and ms_end is not None:
                 covered = max((min(end, ms_end) - start).days + 1, 0)
@@ -350,7 +385,7 @@ def evaluate(
                 amount = a.plus
             elif kind in WORK_TYPES:
                 amount = a.plus_mit_teilzeit if a.plus_mit_teilzeit else a.plus
-            if covered:
+            if covered and maternity is not None:
                 days = (end - start).days + 1
                 share = amount * Decimal(covered) / Decimal(days)  # Elterngeld for the covered days
                 credit = share if maternity.credited_per_day is None else min(share, maternity.credited_per_day * covered)
@@ -416,16 +451,17 @@ def _budget(tl: list[list[str]], parents: list[ParentContext], single_parent_4c:
 
     eqs = [count(i, "basis") + Decimal(count(i, *PLUS_TYPES)) / 2 for i in range(n)]
     claiming = [count(i, *EG_TYPES) > 0 for i in range(n)]
-    per_parent_limit = 14 if single_parent_4c else 12
+    partner_ok = partnermonate_possible(parents)
+    per_parent_limit = 14 if (single_parent_4c and partner_ok) else 12
     if n == 2:
-        shared_limit = 14 if all(claiming) else 12
+        shared_limit = 14 if all(claiming) and partner_ok else 12
     else:
-        shared_limit = 14 if single_parent_4c else 12
+        shared_limit = per_parent_limit
     shared_used = sum(eqs, Decimal(0))
     out_parents = []
     for i, p in enumerate(parents):
         # a parent who does not claim yet would unlock the 2 Partnermonate by claiming
-        pool = 14 if (n == 2 and (all(claiming) or not claiming[i])) else shared_limit
+        pool = 14 if (n == 2 and partner_ok and (all(claiming) or not claiming[i])) else shared_limit
         left = max(min(per_parent_limit - eqs[i], pool - shared_used), Decimal(0))
         free_basis_slots = count(i, "none", upto=BASIS_LAST_LM)
         free_plus_slots = count(i, "none", upto=EG_LAST_LM)
@@ -450,11 +486,11 @@ def _budget(tl: list[list[str]], parents: list[ParentContext], single_parent_4c:
         })
     partner = None
     if n == 2:
-        partner = ("unlocked" if all(claiming) else
+        partner = ("unavailable" if not partner_ok else "unlocked" if all(claiming) else
                    "available" if any(claiming) else "not_used")
     return {
         "shared_limit": shared_limit,
-        "shared_max": 14 if (n == 2 or single_parent_4c) else 12,
+        "shared_max": 14 if (n == 2 or single_parent_4c) and partner_ok else 12,
         "shared_used": shared_used,
         "shared_left": max(Decimal(shared_limit) - shared_used, Decimal(0)),
         "partnermonate": partner,

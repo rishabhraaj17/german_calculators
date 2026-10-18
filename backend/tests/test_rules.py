@@ -74,11 +74,11 @@ def test_kinderfreibetrag_never_reduces_income_tax():
 def test_social_contribution_flat_rates():
     """§ 2f Abs. 1 BEEG: 9 % + 10 % + 2 %."""
     m = E.Abzugsmerkmale(erwerbsart=E.Erwerbsart.ANGESTELLT)
-    assert E.sozialabgaben(D(3000), m) == D(630)
+    assert E.sozialabgaben(D(3000), m, date(2027, 5, 1)) == D(630)
     voluntary = E.Abzugsmerkmale(erwerbsart=E.Erwerbsart.ANGESTELLT, kv_pflichtversichert=False)
-    assert E.sozialabgaben(D(3000), voluntary) == D(360)
+    assert E.sozialabgaben(D(3000), voluntary, date(2027, 5, 1)) == D(360)
     beamt = E.Abzugsmerkmale(erwerbsart=E.Erwerbsart.BEAMT)
-    assert E.sozialabgaben(D(3000), beamt) == D(0)
+    assert E.sozialabgaben(D(3000), beamt, date(2027, 5, 1)) == D(0)
 
 
 def test_unsupported_birth_dates_are_rejected():
@@ -116,6 +116,9 @@ def test_steuerklasse_richtlinien_example():
     (["IV"] * 7 + ["III"] * 5, "IV"),  # IV applied longer
     (["III"] * 12, "III"),
     (["IV"] * 4 + ["V"] * 4 + ["III"] * 4, "III"),
+    # § 2c Abs. 3 Satz 2: "in der überwiegenden Zahl der Kalendermonate" = a majority, not the most months
+    (["V"] * 5 + ["IV"] * 3 + ["III"] * 4, "III"),
+    (["V"] * 7 + ["IV"] * 1 + ["III"] * 4, "V"),
 ])
 def test_steuerklasse_rule(months, expected):
     assert massgebliches_merkmal(months) == expected
@@ -163,3 +166,15 @@ def test_income_cap_boundary():
     assert check_income_cap(D(175000), True).status == Status.MET  # "mehr als 175 000"
     assert check_income_cap(D(175001), True).status == Status.NOT_MET
     assert check_income_cap(D(170000), False).status == Status.CONDITIONAL  # estimate within 5 %
+
+
+def test_minijob_limit_of_the_year_before_birth():
+    # § 8 Abs. 1a SGB IV: 556 € in 2025, 603 € in 2026 (dynamic with the minimum wage)
+    m = E.Abzugsmerkmale(erwerbsart=E.Erwerbsart.ANGESTELLT, steuerklasse=E.Steuerklasse.V)
+    assert E.steuern(D(550), m, date(2026, 5, 1)).summe == 0  # 2025 limit 556 €
+    assert E.steuern(D(600), m, date(2027, 5, 1)).summe == 0  # 2026 limit 603 €
+    assert E.steuern(D(600), m, date(2026, 5, 1)).summe > 0
+    # Übergangsbereich (§ 20 Abs. 2a SGB IV) with G = 603 €: SV base at 700 € = F·G + (2000/(2000−G) − G/(2000−G)·F)·(700−G)
+    g, f = D(603), D("0.6667")
+    base = f * g + (D(2000) / (2000 - g) - g / (2000 - g) * f) * (700 - g)
+    assert E.sozialabgaben(D(700), m, date(2027, 5, 1)) == E.cent(E.cent(base) * D("0.21"))
