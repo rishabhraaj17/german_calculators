@@ -176,6 +176,14 @@ def _runs(lms: list[int]) -> list[tuple[int, int]]:
     return runs
 
 
+def default_work_hours(kind: str, planned: Decimal) -> Decimal:
+    """Weekly hours for a working month without entered hours: the parent's planned part-time hours
+    if they fit the month type (Bonus 24–32 h, § 4b Abs. 1; Plus with work up to 32 h), else 24 h."""
+    if kind == "bonus":
+        return planned if BONUS_MIN_H <= planned <= BONUS_MAX_H else Decimal(24)
+    return planned if 0 < planned <= BONUS_MAX_H else Decimal(24)
+
+
 def _effective_hours(tl: list[list[str]], parents: list[ParentContext], given: list[list[Decimal | None]] | None,
                      birthing: int | None, forced: list[int]) -> list[list[Decimal]]:
     """Weekly working hours per parent and Lebensmonat: entered value, else a default by month type.
@@ -192,7 +200,9 @@ def _effective_hours(tl: list[list[str]], parents: list[ParentContext], given: l
             if value is None:
                 if kind == "none":
                     value = p.contract_hours if p.employee else ZERO
-                elif kind in WORK_TYPES or (kind == "basis" and p.part_time_in_basis):
+                elif kind in WORK_TYPES:
+                    value = default_work_hours(kind, p.part_time_hours)
+                elif kind == "basis" and p.part_time_in_basis:
                     value = p.part_time_hours
                 else:
                     value = ZERO
@@ -629,9 +639,7 @@ def presets(n_parents: int, first: int, single_parent_4c: bool,
         out: list[list[Decimal | None]] = []
         for i, row in enumerate(tl):
             planned = part_time_hours[i] if part_time_hours and i < len(part_time_hours) else ZERO
-            bonus = planned if BONUS_MIN_H <= planned <= BONUS_MAX_H else Decimal(24)
-            work = planned if 0 < planned <= BONUS_MAX_H else Decimal(24)
-            out.append([bonus if t == "bonus" else work if t == "plus_tz" else None for t in row])
+            out.append([default_work_hours(t, planned) if t in WORK_TYPES else None for t in row])
         return out
 
     out = []

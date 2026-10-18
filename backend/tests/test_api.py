@@ -510,3 +510,24 @@ def test_bundles_adapt_to_mutterschutz_and_jobs():
     jobless = [{**COUPLE["parents"][0], "erwerbsart": "keine", "monthly_gross": 0}, COUPLE["parents"][1]]
     ids = [p["id"] for p in client.post("/api/analyse", json={**COUPLE, "parents": jobless}).json()["plan"]["presets"]]
     assert "bonus" not in ids and "early" not in ids and "classic" in ids
+
+
+def test_bundle_applied_without_its_hours_still_valid():
+    # an older page applied bundles without their hours: bonus months must not default to 0 h
+    bundle = next(p for p in client.post("/api/analyse", json=COUPLE).json()["plan"]["presets"] if p["id"] == "together")
+    r = client.post("/api/analyse", json={**COUPLE, "timeline": bundle["timeline"], "hours": None}).json()["plan"]
+    assert r["valid"], r["errors"]
+    assert r["hours"][0][14] == r["hours"][1][14] == "24"  # bonus month 15 -> 24 h when none planned
+    assert r["household_net_24"] == bundle["household_net_24"]
+
+
+def test_index_references_assets_with_current_version():
+    # cache busting: the ?v= stamp must change whenever app.js or styles.css change
+    import hashlib
+    from pathlib import Path
+    public = Path(__file__).resolve().parents[2] / "public"
+    stamp = hashlib.sha256(b"".join((public / "static" / f).read_bytes()
+                                    for f in ("app.js", "styles.css"))).hexdigest()[:10]
+    html = (public / "index.html").read_text()
+    assert f"/static/styles.css?v={stamp}" in html and f"/static/app.js?v={stamp}" in html, \
+        f"update the asset version in index.html to ?v={stamp}"

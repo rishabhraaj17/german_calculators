@@ -688,7 +688,7 @@ function bonusNotice(r) {
   return `<div class="bonus-notice">
     <p><strong>Partnerschaftsbonus available: ${missing} more month${missing > 1 ? "s" : ""}${r.parents.length > 1 ? " for each parent" : ""}</strong>
     – ${r.parents.every((x) => x.amounts.plus_mit_teilzeit) ? "about" : "up to about"} ${eur(perMonth * missing, false)} extra${r.parents.every((x) => x.amounts.plus_mit_teilzeit) ? "" : "; enter the planned part-time pay for the exact amount"}.</p>
-    <p class="${hoursOk ? "" : "warn"}">${hoursOk ? "Your planned hours (24–32 h/week) qualify." : `Needs 24–32 working hours/week ${r.parents.length > 1 ? "for both parents " : ""}in every bonus month – enter the planned hours under "Part-time".`}</p>
+    <p>${hoursOk ? "Your planned hours (24–32 h/week) qualify." : `Needs 24–32 working hours/week ${r.parents.length > 1 ? "for both parents " : ""}in every bonus month. Bonus months start at 24 h/week where no planned hours fit – change them in the table.`}</p>
     ${action}
   </div>`;
 }

@@ -48,4 +48,4 @@ if PUBLIC.is_dir() and not ON_VERCEL:
 
     @app.get("/")
     def index() -> FileResponse:
-        return FileResponse(PUBLIC / "index.html")
+        return FileResponse(PUBLIC / "index.html", headers={"Cache-Control": "no-cache"})  # always the current page
