@@ -1,0 +1,8 @@
+services:
+  app:
+    build: { context: ., target: app }
+    ports: ["8000:8000"]
+    restart: unless-stopped
+  test:
+    build: { context: ., target: test }
+    profiles: ["test"]

@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Elterngeld Check</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="masthead">
+  <h1>Elterngeld Check</h1>
+  <p>Am I eligible, how much will I get, and what can I still change? Calculated with the BEEG, the Richtlinien zum BEEG 07/2026 and the official BMF wage-tax program – for births from 1&nbsp;January&nbsp;2026 to 31&nbsp;December&nbsp;2027.</p>
+</header>
+
+<main class="layout">
+<form id="form" novalidate>
+
+  <fieldset class="step">
+    <legend><span class="n">1</span>Your child</legend>
+    <div class="grid">
+      <label class="field"><span class="t">Birth date</span><small>expected or actual</small><input type="date" name="birth_date" required min="2026-01-01" max="2027-12-31"></label>
+      <label class="field"><span class="t">Expected due date</span><small>for Mutterschutz; empty = same as birth</small><input type="date" name="due_date"></label>
+      <label class="field"><span class="t">Children born</span><small>twins count as 2</small><select name="children_expected"><option value="1">1</option><option value="2">2 (twins)</option><option value="3">3</option></select></label>
+    </div>
+    <div class="toggles">
+      <label class="check"><input type="checkbox" name="premature_or_disability"><span>Premature birth or disability <small>12 weeks Mutterschutz</small></span></label>
+    </div>
+    <div class="subsection">
+      <h3>Older siblings in the household</h3>
+      <p class="hint">For the Geschwisterbonus (+10 %).</p>
+      <div id="siblings"></div>
+      <button type="button" class="link" id="add-sibling">Add sibling</button>
+    </div>
+  </fieldset>
+
+  <fieldset class="step">
+    <legend><span class="n">2</span>Household</legend>
+    <div class="options">
+      <label class="option"><input type="radio" name="household" value="married" checked><span>Married or registered partners</span></label>
+      <label class="option"><input type="radio" name="household" value="partnership"><span>Unmarried, living together</span></label>
+      <label class="option"><input type="radio" name="household" value="single"><span>Single parent</span></label>
+    </div>
+    <div class="toggles only-single">
+      <label class="check"><input type="checkbox" name="single_parent_4c"><span>Single-parent relief applies and the other parent doesn't live with us <small>§ 4c BEEG – up to 14 months alone</small></span></label>
+    </div>
+  </fieldset>
+
+  <div id="parents"></div>
+
+  <fieldset class="step">
+    <legend><span class="n" id="n-cap">5</span>Income cap – year before birth</legend>
+    <p class="hint">No Elterngeld if the zu versteuerndes Einkommen (zvE) of the calendar year before birth exceeds 175.000 € – for couples living together, both incomes combined.</p>
+    <div class="options">
+      <label class="option"><input type="radio" name="zve_mode" value="quick" checked><span>Quick estimate from the pay entered above</span></label>
+      <label class="option"><input type="radio" name="zve_mode" value="estimate"><span>Estimate from my Lohnsteuerbescheinigung</span></label>
+      <label class="option"><input type="radio" name="zve_mode" value="bescheid"><span>I have the Steuerbescheid</span></label>
+    </div>
+    <p class="hint mode-bescheid-hint" id="cap-year-hint">Use the Steuerbescheid of the calendar year before birth – an older one does not count (§ 1 Abs. 8 BEEG).</p>
+    <div class="mode mode-bescheid grid">
+      <label class="field"><span class="t">zvE in the Steuerbescheid <span class="cap-year"></span></span><small>joint value, or Parent A</small><input type="number" name="bescheid_0" min="0" step="1" inputmode="numeric"></label>
+      <label class="field only-two"><span class="t">zvE of Parent B</span><small>only if assessed separately</small><input type="number" name="bescheid_1" min="0" step="1" inputmode="numeric"></label>
+    </div>
+    <div class="mode mode-estimate" id="zve-persons"></div>
+    <div class="grid mode mode-estimate mode-quick">
+      <label class="field"><span class="t">Kinderfreibetrag count</span><small>Zähler for older children; 1.0 per child if married</small><input type="number" name="kinderfreibetrag_zaehler" value="0" min="0" step="0.5"></label>
+      <label class="field only-married"><span class="t">Tax assessment</span><small>as in your tax return</small><select name="zusammenveranlagung"><option value="joint">Joint (Zusammenveranlagung)</option><option value="separate">Separate</option></select></label>
+      <label class="field only-single"><span class="t">Older children in household</span><small>in that year; gives the § 24b relief</small><input type="number" name="kinder_im_haushalt" value="0" min="0"></label>
+    </div>
+  </fieldset>
+
+  <div class="actions">
+    <button type="submit" class="primary">Check eligibility and amount</button>
+    <div class="storage" role="group" aria-label="Save and reuse your numbers">
+      <button type="button" class="secondary" id="save">Save in this browser</button>
+      <button type="button" class="secondary" id="load" disabled>Load saved</button>
+      <button type="button" class="secondary" id="export">Export file</button>
+      <button type="button" class="secondary" id="import">Import file</button>
+      <input type="file" id="import-file" accept="application/json,.json" hidden>
+    </div>
+    <p class="hint" id="storage-status" role="status"></p>
+    <p class="hint">Nothing is sent to or stored on a server. Saved numbers stay in this browser; exported files stay wherever you keep them.</p>
+  </div>
+</form>
+
+<section id="results" aria-live="polite">
+  <div class="empty">
+    <h2>Your result appears here</h2>
+    <p>Enter at least the birth date and the average monthly gross pay. You find it on your payslips: the regular pay of the 12 months before birth, without bonuses, holiday or Christmas pay.</p>
+  </div>
+</section>
+</main>
+
+<section id="plan-section" class="plan-section" aria-live="polite"></section>
+
+<template id="tpl-parent">
+  <fieldset class="step parent">
+    <legend><span class="n"></span><input class="name" name="label" aria-label="Name of this parent" value="" maxlength="40"></legend>
+    <div class="grid">
+      <label class="field"><span class="t">Work before birth</span><small>employee includes Midijob</small><select name="erwerbsart">
+        <option value="angestellt">Employee</option>
+        <option value="beamt">Civil servant</option>
+        <option value="minijob">Minijob only</option>
+        <option value="keine">No income</option></select></label>
+      <label class="field"><span class="t">Monthly gross pay</span><small>regular pay, before bAV, no bonuses</small><input type="number" name="monthly_gross" min="0" step="0.01" inputmode="decimal"></label>
+      <label class="field"><span class="t">Bonuses per year</span><small>13th salary, holiday/Christmas pay</small><input type="number" name="bonuses_annual" min="0" step="0.01" inputmode="decimal" value="0"></label>
+      <label class="field"><span class="t">… of that not yet paid</span><small>helps to stay under the cap</small><input type="number" name="bonuses_pending" min="0" step="0.01" inputmode="decimal" value="0"></label>
+      <label class="field"><span class="t">Company pension (bAV) per month</span><small>your own salary conversion</small><input type="number" name="bav_monthly" min="0" step="0.01" inputmode="decimal" value="0"></label>
+      <label class="field"><span class="t">Kinderfreibeträge</span><small>as on the payslip</small><input type="number" name="kinderfreibetraege" value="0" min="0" step="0.5"></label>
+      <label class="field"><span class="t">Health insurance</span><small>decides who pays Mutterschaftsgeld</small><select name="kv_art">
+        <option value="gkv_pflicht">Statutory, compulsory</option>
+        <option value="gkv_freiwillig">Statutory, voluntary</option>
+        <option value="privat">Private</option></select></label>
+      <label class="field"><span class="t">Net pay per month</span><small>payslip, optional; for Mutterschaftsgeld</small><input type="number" name="net_monthly" min="0" step="0.01" inputmode="decimal" placeholder="estimated if empty"></label>
+      <label class="field"><span class="t">Steuerklasse</span><small>as on the payslip</small><select name="steuerklasse">
+        <option value="I">I</option><option value="II">II</option><option value="III">III</option><option value="IV" selected>IV</option><option value="IV_FAKTOR">IV with Faktor</option><option value="V">V</option></select></label>
+      <label class="field faktor"><span class="t">Faktor</span><small>three decimals, e.g. 0,912</small><input type="number" name="faktor" value="1" min="0.001" max="1" step="0.001"></label>
+    </div>
+    <div class="toggles">
+      <label class="check"><input type="checkbox" name="birthing_parent"><span>Gives birth <small>Mutterschutz</small></span></label>
+      <label class="check"><input type="checkbox" name="kirchensteuer"><span>Pays church tax</span></label>
+    </div>
+    <details>
+      <summary>Part-time, excluded months and residence</summary>
+      <div class="grid">
+        <label class="field"><span class="t">Contract hours per week</span><small>before birth, full-time = 40</small><input type="number" name="weekly_hours" value="40" min="1" max="60" step="0.5"></label>
+        <label class="field"><span class="t">Hours per week while on Elterngeld</span><small>max. 32; bonus needs 24–32</small><input type="number" name="part_time_hours" value="0" min="0" max="60" step="0.5"></label>
+        <label class="field"><span class="t">Part-time gross per month</span><small>empty = calculated from the hours</small><input type="number" name="part_time_gross" min="0" step="0.01"></label>
+        <label class="field"><span class="t">Excluded months</span><small>e.g. pregnancy-related illness, as YYYY-MM</small><input name="extra_excluded_months" placeholder="2026-09, 2026-10"></label>
+        <label class="field wide"><span class="t">Nationality or residence permit</span><small>§ 1 Abs. 7 BEEG</small><select name="aufenthalt">
+          <option value="de_eu_eea_ch">German, EU, EEA or Swiss citizen</option>
+          <option value="niederlassung">Niederlassungserlaubnis or Daueraufenthalt-EU</option>
+          <option value="blaue_karte_ict">Blue Card EU or ICT card</option>
+          <option value="ae_erwerb">Other permit allowing work for 6+ months</option>
+          <option value="ae_studium_suche">Study or job-search permit</option>
+          <option value="ae_ausbildung_saison">Training, au pair or seasonal work permit</option>
+          <option value="ae_humanitaer">Humanitarian permit (§ 23 I, 23a, 25 III–V)</option>
+          <option value="beschaeftigungsduldung">Beschäftigungsduldung (§ 60d)</option>
+          <option value="sonstige">Other, visa or Duldung</option></select></label>
+        <label class="field permit-extra"><span class="t">Months of stay in Germany</span><small>for humanitarian permits</small><input type="number" name="aufenthalt_seit_monaten" value="0" min="0"></label>
+      </div>
+      <div class="toggles">
+        <label class="check"><input type="checkbox" name="wohnsitz" checked><span>Lives in Germany</span></label>
+        <label class="check"><input type="checkbox" name="haushalt" checked><span>Lives with the child and cares for it</span></label>
+        <label class="check"><input type="checkbox" name="erwerbstaetig" checked><span>Working, on Elternzeit or receiving Arbeitslosengeld I</span></label>
+      </div>
+    </details>
+  </fieldset>
+</template>
+
+<template id="tpl-zve-person">
+  <div class="zve-person">
+    <h3></h3>
+    <div class="grid">
+      <label class="field"><span class="t">Gross wages (taxable)</span><small>Zeile 3</small><input type="number" name="jahresbrutto" min="0"></label>
+      <label class="field"><span class="t">Work expenses</span><small>only if above 1.230 €</small><input type="number" name="werbungskosten" min="0"></label>
+      <label class="field"><span class="t">Employee pension contribution</span><small>Zeile 23a</small><input type="number" name="rv_arbeitnehmer" min="0"></label>
+      <label class="field"><span class="t">Employer pension contribution</span><small>Zeile 22a</small><input type="number" name="rv_arbeitgeber" min="0"></label>
+      <label class="field"><span class="t">Health insurance (employee)</span><small>Zeile 25</small><input type="number" name="kv_arbeitnehmer" min="0"></label>
+      <label class="field"><span class="t">Long-term care (employee)</span><small>Zeile 26</small><input type="number" name="pv_arbeitnehmer" min="0"></label>
+      <label class="field"><span class="t">Unemployment insurance (employee)</span><small>Zeile 27</small><input type="number" name="alv_arbeitnehmer" min="0"></label>
+      <label class="field"><span class="t">Other income</span><small>self-employment, rent; losses negative</small><input type="number" name="andere_einkuenfte"></label>
+      <label class="field"><span class="t">Private health insurance, basic share</span><small>per year, from your insurer</small><input type="number" name="private_kv_pv_basis" min="0"></label>
+      <label class="field"><span class="t">Employer subsidy, private insurance</span><small>Zeile 24</small><input type="number" name="private_kv_ag_zuschuss" min="0"></label>
+      <label class="field"><span class="t">Basisrente (Rürup) contributions</span><small>per year</small><input type="number" name="basisrente_beitraege" min="0"></label>
+      <label class="field"><span class="t">Church tax paid</span><small>Zeile 6–7</small><input type="number" name="kirchensteuer_gezahlt" min="0"></label>
+      <label class="field"><span class="t">Donations</span><small>per year</small><input type="number" name="spenden" min="0"></label>
+      <label class="field"><span class="t">Extraordinary burdens</span><small>deductible part, § 33 EStG</small><input type="number" name="aussergewoehnliche_belastungen" min="0"></label>
+      <label class="field"><span class="t">Childcare costs</span><small>children under 14</small><input type="number" name="kinderbetreuungskosten" min="0"></label>
+      <label class="field"><span class="t">Children with childcare costs</span><small>number</small><input type="number" name="kinder_betreut" min="0" value="0"></label>
+      <label class="field"><span class="t">Company pension (bAV) this year</span><small>salary conversion so far</small><input type="number" name="bav_existing" min="0"></label>
+      <label class="field"><span class="t">One-off payments still due</span><small>this year</small><input type="number" name="pending_one_off" min="0"></label>
+    </div>
+    <div class="toggles">
+      <label class="check"><input type="checkbox" name="rv_frei_mit_versorgung"><span>Civil servant (no statutory pension)</span></label>
+    </div>
+  </div>
+</template>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
