@@ -1,0 +1,11 @@
+# not needed for the deployment (tests run in Docker)
+.playwright-mcp
+.venv
+**/__pycache__
+**/.pytest_cache
+backend/tests
+tools
+docs
+Dockerfile
+docker-compose.yml
+.dockerignore

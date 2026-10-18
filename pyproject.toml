@@ -1,0 +1,12 @@
+# Vercel deployment (the Docker image uses backend/requirements.txt).
+[project]
+name = "elterngeld-check"
+version = "1.0.0"
+requires-python = "~=3.13.0"
+dependencies = [
+    "fastapi==0.143.3",
+    "pydantic==2.14.1",
+]
+
+[tool.vercel]
+entrypoint = "backend.app.main:app"

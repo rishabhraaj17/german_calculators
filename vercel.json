@@ -1,0 +1,20 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["fra1"],
+  "functions": {
+    "backend/app/main.py": {
+      "maxDuration": 10,
+      "excludeFiles": "{public/**,backend/tests/**,tools/**,docs/**,.playwright-mcp/**,**/__pycache__/**,**/.pytest_cache/**,backend/requirements*.txt,backend/pytest.ini,Dockerfile,docker-compose.yml,README.md}"
+    }
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [{ "key": "Cache-Control", "value": "no-store" }]
+    },
+    {
+      "source": "/static/(.*)",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=300, stale-while-revalidate=86400" }]
+    }
+  ]
+}

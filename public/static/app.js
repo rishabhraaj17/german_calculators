@@ -172,11 +172,30 @@ function buildRequest() {
   };
 }
 
+// Recent results by request: going back to an earlier plan needs no new server call.
+const resultCache = new Map();
+const RESULT_CACHE_SIZE = 30;
+
+async function fetchAnalysis(payload) {
+  if (resultCache.has(payload)) return { ok: true, body: resultCache.get(payload) };
+  let res, body;
+  try {
+    res = await fetch("/api/analyse", { method: "POST", headers: { "Content-Type": "application/json" }, body: payload });
+    body = await res.json();
+  } catch {
+    return { ok: false, body: { detail: "The calculation server did not answer. Check your connection and try again in a moment." } };
+  }
+  if (res.ok) {
+    resultCache.set(payload, body);
+    if (resultCache.size > RESULT_CACHE_SIZE) resultCache.delete(resultCache.keys().next().value);
+  }
+  return { ok: res.ok, body };
+}
+
 async function runAnalysis({ keepScroll = false } = {}) {
   const scroll = $("#results").scrollTop;
-  const res = await fetch("/api/analyse", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildRequest()) });
-  const body = await res.json();
-  if (!res.ok) {
+  const { ok, body } = await fetchAnalysis(JSON.stringify(buildRequest()));
+  if (!ok) {
     const detail = Array.isArray(body.detail) ? body.detail.map((d) => `${d.loc.slice(1).join(" › ")}: ${d.msg}`).join("; ") : body.detail;
     renderError(detail);
     return false;

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -10,7 +11,8 @@ from .service import analyse
 
 app = FastAPI(title="Elterngeld & zvE Calculator", version="1.0.0")
 
-FRONTEND = Path(__file__).resolve().parents[2] / "frontend"
+PUBLIC = Path(__file__).resolve().parents[2] / "public"
+ON_VERCEL = bool(os.environ.get("VERCEL"))  # Vercel serves public/ from its CDN, so the function only answers /api
 
 
 @app.get("/api/health")
@@ -41,9 +43,9 @@ def analyse_endpoint(req: AnalyseRequest) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-if FRONTEND.is_dir():
-    app.mount("/static", StaticFiles(directory=FRONTEND), name="static")
+if PUBLIC.is_dir() and not ON_VERCEL:
+    app.mount("/static", StaticFiles(directory=PUBLIC / "static"), name="static")
 
     @app.get("/")
     def index() -> FileResponse:
-        return FileResponse(FRONTEND / "index.html")
+        return FileResponse(PUBLIC / "index.html")

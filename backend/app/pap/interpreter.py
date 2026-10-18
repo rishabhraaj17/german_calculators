@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 _PAP_DIR = Path(__file__).parent
+_RESULT_CACHE_SIZE = 4096  # per PAP year; bounded so a long-lived instance stays small
 _CTX = Context(prec=80)  # wide enough that unscaled BigDecimal ops stay exact
 
 
@@ -118,6 +119,8 @@ class Programmablaufplan:
         self._main = methods.find("MAIN")
         self._methods = {m.get("name"): m for m in methods.findall("METHOD")}
         self._code_cache: dict[str, Any] = {}
+        self._base: dict[str, Any] | None = None
+        self._results: dict[tuple, dict[str, int]] = {}
 
     def _compile(self, src: str, mode: str) -> Any:
         key = mode + src
@@ -127,18 +130,25 @@ class Programmablaufplan:
             self._code_cache[key] = code
         return code
 
+    def _base_scope(self) -> dict[str, Any]:
+        """Constants and defaults, evaluated once; BigDecimal values are immutable, so runs can share them."""
+        if self._base is None:
+            scope: dict[str, Any] = {"BigDecimal": BigDecimal, "__builtins__": {}}
+            for name, value in self._constants.items():
+                scope[name] = eval(self._compile(value, "eval"), scope)
+            for name, typ in self._types.items():
+                default = self._defaults.get(name)
+                if default:
+                    scope[name] = eval(self._compile(default, "eval"), scope)
+                else:
+                    scope[name] = BigDecimal.ZERO if typ == "BigDecimal" else 0
+                if typ == "double" and isinstance(scope[name], int):
+                    scope[name] = float(scope[name])
+            self._base = scope
+        return self._base
+
     def _initial_scope(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        scope: dict[str, Any] = {"BigDecimal": BigDecimal, "__builtins__": {}}
-        for name, value in self._constants.items():
-            scope[name] = eval(self._compile(value, "eval"), scope)
-        for name, typ in self._types.items():
-            default = self._defaults.get(name)
-            if default:
-                scope[name] = eval(self._compile(default, "eval"), scope)
-            else:
-                scope[name] = BigDecimal.ZERO if typ == "BigDecimal" else 0
-            if typ == "double" and isinstance(scope[name], int):
-                scope[name] = float(scope[name])
+        scope = dict(self._base_scope())
         for name, value in inputs.items():
             if name not in self._types:
                 raise KeyError(f"{self.name}: unknown input {name}")
@@ -168,10 +178,18 @@ class Programmablaufplan:
 
     def run(self, **inputs: Any) -> dict[str, int]:
         """Runs the PAP. Monetary inputs/outputs are in cent, as in the PAP."""
-        scope = self._initial_scope(inputs)
-        assert self._main is not None
-        self._exec_block(self._main, scope)
-        return {name: int(scope[name].v) for name in self.outputs if isinstance(scope[name], BigDecimal)}
+        # a run depends only on its inputs, so identical calls (frequent within one analysis) reuse the result
+        key = tuple(sorted((k, type(v).__name__, str(v)) for k, v in inputs.items()))
+        hit = self._results.get(key)
+        if hit is None:
+            scope = self._initial_scope(inputs)
+            assert self._main is not None
+            self._exec_block(self._main, scope)
+            hit = {name: int(scope[name].v) for name in self.outputs if isinstance(scope[name], BigDecimal)}
+            if len(self._results) >= _RESULT_CACHE_SIZE:
+                self._results.clear()
+            self._results[key] = hit
+        return dict(hit)
 
 
 # Security note: compile()/eval() above only ever run expressions taken from

@@ -1,99 +1,121 @@
 # Elterngeld Check
 
-Calculator for German residents (single parents and couples) that answers three questions:
+A calculator for parents in Germany who are expecting a child born in 2026 or 2027. From payslip figures it answers:
 
-1. **Am I eligible for Elterngeld?** § 1 BEEG, including the income cap of 175.000 € zu versteuerndes Einkommen (zvE) in the year before birth.
-2. **How much will I get?** Basiselterngeld, ElterngeldPlus, part-time, Partnerschaftsbonus, Geschwisterbonus, multiples. Calculated from payslip data, with Mutterschaftsgeld credited for the birthing parent.
-3. **If not eligible, or to get more: what can I still change, and by when?** Every lever cites its legal basis, an amount and a deadline.
+1. **Are we eligible for Elterngeld?** The income cap of 175.000 € taxable income (zvE) in the year before birth (§ 1 Abs. 8 BEEG).
+2. **How much will we get, month by month?** Basiselterngeld, ElterngeldPlus, part-time work, Partnerschaftsbonus, Geschwisterbonus and multiples, with Mutterschaftsgeld credited.
+3. **What can we still change, and by when?** Each suggestion names its legal basis, the amount and the deadline.
 
-Scope: births from **01.01.2026 to 31.12.2027**, for employees, civil servants and Minijob earners. For those births § 2e BEEG requires the Lohnsteuer program (PAP) of 2025 and 2026, and both are bundled verbatim. Self-employed and mixed income are out of scope (§ 2b Abs. 2, 3 BEEG use other rules) and are not approximated.
+It also plans your months on Elterngeld and Elternzeit for both parents. It then shows what that plan means for take-home pay, vacation days, pension points and health insurance, and which parent should take what.
 
-## Run (Docker)
+The tax side runs the official BMF wage-tax program and matches the BMF's own calculator in 314 of 314 reference cases. The Elterngeld side is checked against 4.000 results from the official federal Elterngeldrechner (details in [Why you can trust the numbers](#why-you-can-trust-the-numbers)).
+
+> This is not legal or tax advice. Your Elterngeldstelle, Finanzamt, Krankenkasse and the Deutsche Rentenversicherung decide.
+
+## What it covers
+
+| Area | What you get | Legal basis |
+|---|---|---|
+| Eligibility | zvE from your Steuerbescheid or estimated from payslips, compared with the cap; how to get below it | § 1 BEEG, EStG |
+| Elterngeld amount | Elterngeld-Netto, replacement rate, Basis and Plus amounts per parent | §§ 2–2f BEEG |
+| Tax class | Elterngeld under IV/IV, III/V and V/III for your plan, and the last day to switch | § 2c Abs. 3 BEEG |
+| Mutterschutz | Protection periods and Mutterschaftsgeld (Krankenkasse + employer top-up), credited day by day | MuSchG §§ 3, 19–21; § 3 BEEG |
+| Month planner | Lebensmonate 1–36 per parent: Basis, Plus, Plus + part-time, Partnerschaftsbonus or Elternzeit only; rule checks, months left, presets | §§ 4–4c BEEG |
+| Part-time and pay | Weekly hours per month, employer salary pro rata, net pay, Elterngeld with income, total net per month and parent | § 2 Abs. 3 BEEG |
+| Elternzeit | Periods, request deadline (7 weeks) and start of dismissal protection | §§ 15–18 BEEG |
+| Vacation days | Days left per year if the employer reduces leave for Elternzeit | § 17 BEEG, § 24 MuSchG |
+| Pension | Pension points with and without the child, Kindererziehungszeit, monthly pension effect | §§ 56–58, 70 SGB VI |
+| Health insurance | Contributions per phase (statutory, voluntary, private) and how the child is insured | SGB V, SGB XI |
+| Who takes what | Which parent should get the Kindererziehungszeit and insure the child, and which tax class pays | see above |
+
+**Scope:** births from 01.01.2026 to 31.12.2027. Covers employees, civil servants and Minijob earners. Self-employed and mixed income follow other rules (§ 2b Abs. 2, 3 BEEG) and are not approximated.
+
+**Your data stays with you:** nothing is stored on the server. You can save your numbers and month plan in your browser, or export them to a JSON file and import it later.
+
+## Run it
+
+### With Docker
 
 ```sh
-docker compose up -d --build          # UI + API on http://localhost:8000
-docker compose run --rm test          # full test suite inside the image
+docker compose up -d --build     # UI and API on http://localhost:8000
+docker compose run --rm test     # full test suite
 ```
 
-**Plan Elterngeld and Elternzeit:** after the first check, the planner shows Lebensmonate 1–36 for each parent. Pick Basis, Plus, Plus + part-time, Partnerschaftsbonus, or Elternzeit without Elterngeld for each month, or start from a preset: Classic 12+2, Split 7+7, Basis + Plus, or Classic + Partnerschaftsbonus.
-- **Rules checked:** §§ 4, 4b, 4c BEEG, i.e. max. 14 Basis-equivalents, simultaneous Basis only in one month, no gaps from month 15, bonus 2–4 equal months at 24–32 h.
-- **Mutterschaftsgeld** is credited, and the Mutterschutz months are counted as Basis.
-- **Elternzeit periods** are listed with the request deadline (7 weeks before, § 16) and when dismissal protection starts (§ 18).
+### Without Docker
 
-**Part-time from hours:** enter contract hours (default 40) and hours while on Elterngeld. The part-time gross is calculated pro rata (monthly gross × hours ÷ contract hours) unless you enter it. It drives the Elterngeld in "Plus + work" and Bonus months (§ 2 Abs. 3 BEEG), and an estimated take-home pay (real Steuerklasse and contributions) shown per month and in the totals.
+```sh
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+uvicorn app.main:app --reload    # http://localhost:8000
+pytest -q
+```
 
-**Hours, salary and total net per month:** the month planner has its own full-width section. For each parent and Lebensmonat it shows type, hours per week (editable), estimated salary from the employer (gross pro rata to the contract hours, net with real Steuerklasse and contributions), Elterngeld incl. Mutterschaftsgeld, total net, and a household column.
-- **Default hours:** contract hours in months marked "–" (back at work), part-time hours in "Plus + work"/Bonus months, 0 otherwise; locked at 0 during Mutterschutz.
-- **Elterngeld with income:** based on the average income of all Basis months, or of all Plus/Bonus months, with work (§ 2 Abs. 3 BEEG).
-- **Totals:** per parent and for the household, over the whole Elternzeit period.
-- **Saving:** hours are saved and exported with the plan.
+### On Vercel (free Hobby plan)
 
-**Vacation, pension and health insurance** (cards below the planner):
-- **Vacation days:** enter the annual leave per parent. Shown per year: full calendar months of Elternzeit without work, the maximum reduction (1/12 per month, only if the employer declares it; never during part-time with that employer), and the days left at worst (§ 17 BEEG, § 24 MuSchG, BAG 9 AZR 362/18).
-- **Pension points:** points from salary vs. working without a child, plus the Kindererziehungszeit (0,0833 points/month for 36 months, capped at the ceiling). You choose which parent gets it; the result is converted to monthly pension at 42,52 € per point (§§ 56, 58, 70 SGB VI).
-- **Health insurance:** per parent and phase, i.e. contribution-free while receiving Mutterschaftsgeld/Elterngeld or on Elternzeit (compulsory members), the minimum contribution for voluntary members, or the private premium with or without employer subsidy. Also shown: the child's family insurance including the § 10 Abs. 3 exception, and the end of the childless surcharge (SGB V, SGB XI).
+The repo deploys without changes: import it in the Vercel dashboard, or run `npx vercel` and then `npx vercel --prod`.
 
-**Who takes what** (card after health insurance), recalculated from your month plan:
-- **Kindererziehungszeit:** household pension points for each possible parent, with the suggested one (the credit is capped together with salary at the contribution ceiling, so it is worth less to a high earner who keeps working; civil servants are excluded, § 56 Abs. 4 SGB VI).
-- **Child's health insurance:** free family insurance where possible; otherwise private via a civil-servant parent (Beihilfe) or the private insurer's Kindernachversicherung within 2 months of birth (§ 198 VVG).
-- **Tax class:** Elterngeld for IV/IV, III/V and V/III (plus your current class if different) over the current plan, the household net pay per class, and the deadline for the parent who gains (§ 2c Abs. 3 BEEG).
+- **Page:** `public/` is served from Vercel's CDN, so page views don't run Python.
+- **API:** `/api/*` runs as one Python 3.13 function in Frankfurt (`fra1`), with a 10 s limit. Tests, tools and docs stay out of the bundle (`vercel.json`, `.vercelignore`).
+- **Cost per calculation:** about 15–45 ms CPU. Tax-program results are cached in memory, and the browser reuses its last 30 results. The Hobby plan includes 4 CPU-hours and 1 million function calls per month.
+- **Licence terms:** Vercel's Hobby plan is for personal, non-commercial use only.
 
-**Navigation and theme:** a sticky bar links to every section and highlights the one you are reading; the theme switch cycles Auto, Light and Dark and remembers your choice. Save, load, export and import sit in a floating dock at the bottom.
+## API
 
-**Months used and left:**
-- **Household:** Basis-equivalents used of 12/14, and whether the Partnermonate are unlocked or what's needed to unlock them.
-- **Per parent:** Basis, Plus (and with work), and Partnerschaftsbonus used of 4. "Still possible" shows what is left, e.g. "2 Basis or 4 Plus", and Elternzeit months used of 36.
-
-**Mutterschutz and Mutterschaftsgeld** (§ 3, §§ 19–21 MuSchG; § 24i SGB V):
-- **Period:** 6 weeks before the due date, shortened or extended by the actual birth, plus the day of birth and 8/12 weeks after, extended after an early birth.
-- **Amount:** Krankenkasse max. 13 €/day plus the employer top-up, or for privately insured the 210 € once from the BAS plus the top-up.
-- **Basis:** your net pay ÷ 30 per day; uses the payslip net pay if entered, otherwise an estimate.
-- **Against Elterngeld:** deducted day by day from the birth day (the 210 € excluded). The month table shows Mutterschaftsgeld per Lebensmonat and a pre-birth row.
-
-**Reuse your numbers:** *Save in this browser* / *Load saved* (localStorage), or *Export file* / *Import file*. The export is a JSON file holding the whole form, which you can move to another device or reload after the Steuerbescheid arrives. Nothing is stored on the server, and the file contains salary data, so keep it private.
-
-API: `POST /api/analyse`. The schema is in `backend/app/models.py`; interactive docs are at `/docs`.
+`POST /api/analyse` takes the whole form as JSON and returns eligibility, amounts, the month plan, the social-insurance cards and recommendations. The schema is in [`backend/app/models.py`](backend/app/models.py); interactive docs are at `/docs` while the app runs.
 
 ## Why you can trust the numbers
 
 | What | How it is verified |
 |---|---|
-| Wage tax, Soli, church-tax base | The **official BMF pseudocode** (`Lohnsteuer2025.xml`, `Lohnsteuer2026.xml`, checksum-pinned) is executed by a small interpreter with exact decimal arithmetic instead of hand-typed formulas. It matches the **BMF's own calculator on 314/314 reference cases** (`tests/test_pap_bmf.py`). |
-| Elterngeld-Netto and amounts | Compared with **4.000 golden vectors generated by running the official BMFSFJ Elterngeldrechner source** (OpenCoDE, commit `05e1176`). Without Faktorverfahren, 99,7 %+ match to the cent. Every remaining difference is a documented float-rounding artefact in the official JavaScript port, and on the tax side the BMF confirms this engine (see below). |
-| Legal rules | Unit tests pinned to the statute text and to the examples in the Richtlinien zum BEEG (e.g. the Steuerklasse rule in 2c.3.2.2). |
+| Wage tax, Soli, church-tax base | The **official BMF pseudocode** (`Lohnsteuer2025.xml`, `Lohnsteuer2026.xml`, checksum-pinned) runs in a small interpreter with exact decimal arithmetic, instead of hand-typed formulas. It matches the **BMF's own calculator in 314/314 reference cases** (`tests/test_pap_bmf.py`). |
+| Elterngeld-Netto and amounts | Compared with **4.000 golden vectors generated by running the official BMFSFJ Elterngeldrechner source** (OpenCoDE, commit `05e1176`). Without Faktorverfahren, over 99,7 % match to the cent. Every remaining difference is a documented rounding artefact in the official code, and on the tax side the BMF confirms this engine (see below). |
+| Legal rules | Unit tests pinned to the statute text and to the examples in the Richtlinien zum BEEG, e.g. the Steuerklasse rule in 2c.3.2.2. |
 
-### Deviations found in the official calculator (commit 05e1176)
+### Deviations found in the official calculator (commit `05e1176`)
 
-All three are small (≤ 10 cent per month) and were checked against a primary source:
+All three are small (at most 10 cent per month) and were checked against a primary source:
 
-1. **Faktorverfahren:** the official TS port skips the BMF step `LSTJAHR = (ST × f).setScale(0, ROUND_DOWN)`, so its tax is slightly too high. The BMF calculator confirms this engine in all 114 disputed cases.
-2. **Floating point:** the PAP and the cent rounding are computed with JS floats. Example: 1.375,10 € × 0,65 = 893,815 €, which is 893,82 € under the Richtlinien's round-half-up rule; the official code gives 893,81 €.
-3. **KV-Zusatzbeitrag for 2027 births:** the official code still uses the 2025 average (2,5 %). The BMG announced **2,9 % for 2026** (BAnz AT 10.11.2025 B7), and this engine uses 2,9 %.
+1. **Faktorverfahren:** the official TypeScript port skips the BMF step `LSTJAHR = (ST × f).setScale(0, ROUND_DOWN)`, so its tax is slightly too high. The BMF calculator agrees with this engine in all 114 disputed cases.
+2. **Floating point:** the official code computes the PAP and the cent rounding with JavaScript floats. Example: 1.375,10 € × 0,65 = 893,815 €. The Richtlinien round half up, which gives 893,82 €; the official code gives 893,81 €.
+3. **KV-Zusatzbeitrag for 2027 births:** the official code still uses the 2025 average of 2,5 %. The Federal Ministry of Health announced **2,9 % for 2026** (BAnz AT 10.11.2025 B7), and this engine uses 2,9 %.
 
-## What is exact and what is an estimate
+### Exact and estimated values
 
-- **Exact** (given correct inputs): Elterngeld-Netto, monthly amounts, Bemessungszeitraum, Steuerklasse deadline, plan validation.
-- **Estimate:** the zvE when it is derived from Lohnsteuerbescheinigung figures (marked, with a 5 % "verify" band around the cap). Use the value from your **Steuerbescheid** whenever you have it.
-- **Approximation, marked in the UI:** Mini-/Midijob parameters, which mirror the official calculator's fixed 2024 values. Mutterschaftsgeld crediting assumes the benefits exceed the daily Elterngeld, which is normal for employees.
+- **Exact** (given correct inputs): Elterngeld-Netto, monthly amounts, Bemessungszeitraum, tax-class deadline, plan validation.
+- **Estimated, and marked as such:**
+  - **zvE** derived from payslip figures, with a 5 % "verify" band around the cap. Use your Steuerbescheid whenever you have it.
+  - **Take-home pay** during part-time work.
+  - **Health-insurance contributions:** based on the average Zusatzbeitrag.
+  - **Pension points after 2027:** use the 2027 figures. The 2027 figures themselves come from the cabinet decision and are not yet final.
+- **Approximated:** Mini- and Midijob parameters mirror the official calculator's fixed 2024 values.
 
-This is not legal or tax advice. The Elterngeldstelle decides.
+All legal research, with sources, is in [`docs/RESEARCH.md`](docs/RESEARCH.md).
 
-## Layout
+## Project layout
 
 ```
-backend/app/pap/        official BMF PAP XML + interpreter
-backend/app/elterngeld.py  §§ 2, 2a, 2c, 2e, 2f, 4a BEEG
-backend/app/bemessung.py   § 2b, § 2c Abs. 3 BEEG (+ switch deadline)
-backend/app/zve.py         zvE estimate (EStG)
-backend/app/eligibility.py § 1 BEEG
-backend/app/plan.py        §§ 4, 4b, 4c BEEG, Mutterschaftsgeld crediting
-backend/app/advisor.py     levers: eligibility and amount
-frontend/                  static UI (no build step)
-tools/golden/              regenerates golden vectors from the official source (node:24 in Docker)
-tools/bmf_reference/       fetches BMF reference results (QA interface)
-docs/RESEARCH.md           legal research with sources
+backend/app/
+  pap/            official BMF wage-tax programs (XML) and their interpreter
+  elterngeld.py   Elterngeld-Netto and amounts (§§ 2, 2a, 2c, 2e, 2f, 4a BEEG)
+  bemessung.py    Bemessungszeitraum, tax class rule and switch deadline (§§ 2b, 2c BEEG)
+  eligibility.py  eligibility checks (§ 1 BEEG)
+  zve.py          taxable-income estimate (EStG)
+  mutterschutz.py Mutterschutz periods and Mutterschaftsgeld (MuSchG)
+  plan.py         month planner and its rules (§§ 4, 4b, 4c BEEG)
+  sozial.py       vacation, pension points, health insurance, who takes what
+  advisor.py      recommendations with legal basis and deadline
+  service.py      puts it together for POST /api/analyse
+backend/tests/    unit tests, BMF reference cases, golden vectors
+public/           the web page (no build step)
+tools/            scripts that regenerate the golden vectors and BMF reference cases
+docs/RESEARCH.md  legal research with sources
 ```
 
 ## Updating for a new year
 
-When the BMF publishes `Lohnsteuer2027.xml` (usually in November), add it to `backend/app/pap/` with its checksum. Then add a `TaxYear(2027, …)` entry in `params.py` with each value sourced. Re-run `tools/bmf_reference/fetch.py` and the tests.
+When the BMF publishes the next `Lohnsteuer<year>.xml` (usually in November):
+
+1. Add it to `backend/app/pap/` and pin its SHA-256 checksum in `interpreter.py`.
+2. Add the `TaxYear` and `SocialYear` values in `params.py`, each with its source.
+3. Re-run `tools/bmf_reference/fetch.py` and the tests.

@@ -4,7 +4,7 @@ WORKDIR /app/backend
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/app ./app
-COPY frontend /app/frontend
+COPY public /app/public
 
 # Test stage: runs the full suite (golden vectors from the official calculator
 # and BMF reference results). `docker compose run --rm test`
