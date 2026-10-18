@@ -719,15 +719,21 @@ function planner(r) {
   const p = r.plan;
   const n = r.parents.length;
   const valid = p.presets.filter((x) => x.valid);
-  const richest = valid.reduce((a, b) => (!a || Number(b.household_total) > Number(a.household_total) ? b : a), null);
-  const longest = valid.reduce((a, b) => (!a || b.months_with_elterngeld > a.months_with_elterngeld ? b : a), null);
+  const best = (f) => valid.reduce((a, b) => (!a || f(b) > f(a) ? b : a), null);
+  const mostEg = best((x) => Number(x.household_total));
+  const mostMoney = best((x) => Number(x.household_net_24));
+  const mostTime = best((x) => x.home_months.reduce((s, m) => s + m, 0));
   const current = JSON.stringify(p.timeline);
+  const atHome = (x) => x.home_months.map((m, i) => (n > 1 ? `${esc(r.parents[i].label)} ${m}` : `${m}`)).join(" · ");
   const presets = p.presets.map((x) => {
-    const tags = [x === richest ? "Most money" : "", x === longest && x !== richest ? "Longest" : "", JSON.stringify(x.timeline) === current ? "Your plan" : ""].filter(Boolean);
+    const tags = [x === mostEg ? "Most Elterngeld" : "", x === mostMoney ? "Most money overall" : "",
+      x === mostTime ? "Most time at home" : "", JSON.stringify(x.timeline) === current ? "Your plan" : ""].filter(Boolean);
     return `<button type="button" class="preset${x.valid ? "" : " invalid"}${JSON.stringify(x.timeline) === current ? " current" : ""}" data-preset="${esc(x.id)}" aria-pressed="${JSON.stringify(x.timeline) === current}">
       <strong>${esc(x.name)}</strong>
       <span class="sum">${eur(x.household_total, false)}</span>
       <span class="months">${x.months_with_elterngeld} months with Elterngeld</span>
+      <span class="net">${eur(x.household_net_24, false)} household net, first 24 months</span>
+      <span class="months">At home${n > 1 ? "" : ":"} ${atHome(x)} months</span>
       <small>${esc(x.description)}${x.valid ? "" : `<span class="warn"><br>Not possible yet: ${esc(x.errors[0])}</span>`}</small>
       <span class="tags">${tags.map((t) => `<span class="tag">${t}</span>`).join("")}</span>
     </button>`;
@@ -771,6 +777,7 @@ function planner(r) {
 
   return `<div class="card planner" id="plan"><h2>Plan Elterngeld and Elternzeit</h2>
     <p class="hint">Pick a starting point, then change single months and the hours you work. Salary is calculated from your gross pay and contract hours; Elterngeld in months with work uses the average income of all Basis months, or of all Plus and Bonus months, with work (§ 2 Abs. 3 BEEG). 1 Basis month = 2 Plus months.</p>
+    <p class="hint">Bundles to start from, calculated with your inputs – pick one and change single months or hours below. "Household net" adds Elterngeld, Mutterschaftsgeld and both salaries after tax over the first 24 months; "at home" counts months on Elterngeld or Elternzeit without work. Your current plan: ${eur(p.household_total, false)} Elterngeld, ${eur(p.household_net_24, false)} household net, at home ${atHome(p)} months.</p>
     <div class="presets">${presets}</div>
     ${planAlert(r, true)}
     ${notes ? `<ul class="checks">${notes}</ul>` : ""}
@@ -851,8 +858,9 @@ $("#plan-section").addEventListener("click", (e) => {
   }
   const preset = e.target.closest("[data-preset]");
   if (preset && window.__lastResult) {
-    currentTimeline = window.__lastResult.plan.presets.find((x) => x.id === preset.dataset.preset).timeline;
-    currentHours = null; // presets start from the default hours
+    const chosen = window.__lastResult.plan.presets.find((x) => x.id === preset.dataset.preset);
+    currentTimeline = chosen.timeline.map((row) => row.slice());
+    currentHours = chosen.hours.map((row) => row.map((h) => (h === null ? null : Number(h)))); // the bundle's working hours
     runAnalysis({ keepScroll: true });
   }
   if (e.target.id === "toggle-months") {

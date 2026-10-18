@@ -161,7 +161,7 @@ def test_month_planner_timeline_and_presets():
                {**COUPLE["parents"][1], "part_time_gross": 2500, "part_time_hours": 30}]
     r = client.post("/api/analyse", json={**COUPLE, "parents": parents}).json()
     ids = [p["id"] for p in r["plan"]["presets"]]
-    assert ids == ["classic", "split", "plus", "bonus"]
+    assert ids == ["classic", "split", "plus", "bonus", "together", "long", "early"]
     assert all(p["valid"] for p in r["plan"]["presets"]), [p["errors"] for p in r["plan"]["presets"]]
     bonus = next(p for p in r["plan"]["presets"] if p["id"] == "bonus")
     rec = next(x for x in r["recommendations"] if x["id"] == "partnerschaftsbonus")
@@ -459,3 +459,25 @@ def test_fix_search_scores_a_bounded_number_of_candidates(monkeypatch):
     r = client.post("/api/analyse", json={**COUPLE, "parents": parents, "timeline": tl}).json()
     assert not r["plan"]["valid"] and r["plan"]["fixes"]
     assert sum(calls) <= S.MAX_SCORED_FIXES + 15  # + the plan itself, presets and tax-class scenarios
+
+
+def test_bundles_show_income_and_time_at_home_and_apply_with_their_hours():
+    r = client.post("/api/analyse", json=COUPLE).json()["plan"]
+    by_id = {p["id"]: p for p in r["presets"]}
+    assert all(p["valid"] for p in r["presets"]), {p["id"]: p["errors"] for p in r["presets"]}
+    # no part-time hours entered: bonus and part-time months get 24 h, so the bundles are valid as offered
+    assert by_id["bonus"]["hours"][0][14] == "24" and by_id["early"]["hours"][0][2] == "24"
+    classic, long_ = by_id["classic"], by_id["long"]
+    assert classic["home_months"] == [12, 2] and long_["home_months"] == [22, 2]
+    assert classic["household_total"] == long_["household_total"]  # same Elterngeld budget
+    assert float(long_["household_net_24"]) < float(classic["household_net_24"])  # more salary lost
+    assert "household_net_24" in r and "home_months" in r
+    applied = client.post("/api/analyse", json={**COUPLE, "timeline": by_id["early"]["timeline"],
+                                                "hours": by_id["early"]["hours"]}).json()["plan"]
+    assert applied["valid"] and applied["household_net_24"] == by_id["early"]["household_net_24"]
+
+
+def test_partnerschaftsbonus_advice_includes_lost_salary():
+    rec = next(x for x in client.post("/api/analyse", json=COUPLE).json()["recommendations"]
+               if x["id"] == "partnerschaftsbonus")
+    assert "household income" in rec["detail"]

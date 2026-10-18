@@ -426,8 +426,21 @@ def _plan_fixes(req: AnalyseRequest, outcomes: list[ParentOutcome], plan: PlanRe
     return fixes[:MAX_FIXES]
 
 
+COMPARE_MONTHS = 24  # horizon for comparing plans: household income and months at home
+
+
+def _plan_summary(plan: PlanResult) -> dict:
+    """What a plan means for the household over the first 24 Lebensmonate: total net income
+    (Elterngeld, Mutterschaftsgeld, salary) and months each parent is at home without working."""
+    rows = plan.rows[:COMPARE_MONTHS]
+    net = sum((c["total_net"] for row in rows for c in row["parents"]), ZERO)
+    home = [sum(1 for k, row in enumerate(rows) if row["parents"][i]["type"] in ("basis", "plus", "ez")
+                and (not plan.hours or plan.hours[i][k] == 0)) for i in range(len(plan.timeline))]
+    return {"household_net_24": cent(net), "home_months": home}
+
+
 def _plan_json(plan: PlanResult) -> dict:
-    return {
+    return {**_plan_summary(plan),
         "valid": plan.valid, "errors": plan.errors, "notes": plan.notes,
         "timeline": plan.timeline, "rows": plan.rows, "months": plan.months,
         "totals": plan.totals, "household_total": plan.household_total,
@@ -445,11 +458,13 @@ def analyse(req: AnalyseRequest) -> dict:
     outcomes = [_parent_outcome(req, p, gb) for p in req.parents]
     plan = _plan(req, outcomes)
     preset_results = []
-    for pr in plan_presets(len(req.parents), _first_parent(req), req.single_parent_4c):
-        r = _plan(req, outcomes, pr["timeline"])
+    bundles = plan_presets(len(req.parents), _first_parent(req), req.single_parent_4c,
+                           part_time_hours=[p.part_time_hours for p in req.parents])
+    for pr in bundles:
+        r = _plan(req, outcomes, pr["timeline"], hours=pr["hours"])
         preset_results.append({**pr, "timeline": r.timeline, "valid": r.valid, "errors": r.errors,
                                "totals": r.totals, "household_total": r.household_total,
-                               "months_with_elterngeld": r.months_with_elterngeld})
+                               "months_with_elterngeld": r.months_with_elterngeld, **_plan_summary(r)})
 
     # --- income cap -------------------------------------------------------
     z = req.zve
@@ -735,13 +750,17 @@ def _amount_recommendations(req: AnalyseRequest, outcomes: list[ParentOutcome], 
     base = by_id.get("classic") or by_id.get("basis")
     if not has_bonus and "bonus" in by_id and base:
         value = cent(by_id["bonus"]["household_total"] - base["household_total"])
+        net_delta = cent(by_id["bonus"]["household_net_24"] - base["household_net_24"])
         hours_ok = all(24 <= p.part_time_hours <= 32 for p in req.parents)
         recs.append(A.Recommendation(
             id="partnerschaftsbonus", category="amount",
             title="Partnerschaftsbonus: up to 4 extra ElterngeldPlus months each",
             detail=(f"If {'both parents work' if len(req.parents) == 2 else 'you work'} 24–32 hours/week at the same "
                     f"time for 2–4 consecutive months, each gets one extra ElterngeldPlus month per month. 4 bonus "
-                    f"months add about {eur(value)} to the household (compare the presets in the planner). "
+                    f"months add about {eur(value)} Elterngeld. Counting the lower pay while working 24–32 h, your "
+                    f"household income over the first {COMPARE_MONTHS} months changes by about {eur(net_delta)}"
+                    + (" – the bonus costs more salary than it brings. " if net_delta < 0 else ". ")
+                    + "Compare the bundles in the planner. "
                     + ("The entered hours meet the requirement." if hours_ok else
                        "Enter planned part-time hours of 24–32 h for each parent to use it.")),
             legal_basis="§ 4b BEEG" + ("" if len(req.parents) == 2 else ", § 4c Abs. 2 BEEG"),

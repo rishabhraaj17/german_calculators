@@ -323,13 +323,14 @@ ul.checks li { margin-bottom: 6px; display: flex; gap: 8px; }
 /* ---------- month planner ---------- */
 .presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin: 16px 0; }
 .preset {
-  display: grid; grid-template-rows: auto auto auto 1fr auto; gap: 4px; text-align: left; color: var(--ink);
+  display: grid; grid-template-rows: auto auto auto auto auto 1fr auto; gap: 4px; text-align: left; color: var(--ink);
   background: var(--field); border: 1px solid var(--rule); border-radius: var(--radius); padding: 12px 14px;
 }
 .preset:hover { border-color: var(--official); }
 .preset.current { border: 2px solid var(--official); padding: 11px 13px; }
 .preset .sum { font-size: 1.3rem; font-weight: 800; color: var(--official); line-height: 1.2; }
 .preset .months { font-size: .85rem; color: var(--muted); }
+.preset .net { font-size: .9rem; font-weight: 600; }
 .preset small { color: var(--muted); font-size: .8rem; }
 .preset.invalid .sum { color: var(--muted); }
 .preset .warn { color: var(--amber); }

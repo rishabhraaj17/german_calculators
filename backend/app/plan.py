@@ -30,6 +30,7 @@ WORK_TYPES = ("plus_tz", "bonus")
 MAX_LM = 36  # Elternzeit until the 3rd birthday (§ 15 Abs. 2 Satz 1)
 EG_LAST_LM = 32  # § 4 Abs. 1 Satz 4
 BASIS_LAST_LM = 14  # § 4 Abs. 1 Satz 3
+BONUS_MIN_H, BONUS_MAX_H = Decimal(24), Decimal(32)  # § 4b Abs. 1 Nr. 1
 NOTICE = timedelta(weeks=7)  # § 16 Abs. 1 Satz 1 Nr. 1
 PROTECTION_LEAD = timedelta(weeks=8)  # § 18 Abs. 1 Satz 2 Nr. 1
 
@@ -601,8 +602,12 @@ def _elternzeit(tl: list[list[str]], parents: list[ParentContext], birth: date, 
     return out
 
 
-def presets(n_parents: int, first: int, single_parent_4c: bool) -> list[dict]:
-    """Common plan shapes to compare. `first` is the birthing (or first) parent."""
+def presets(n_parents: int, first: int, single_parent_4c: bool,
+            part_time_hours: list[Decimal] | None = None) -> list[dict]:
+    """Plan bundles to compare and customise. `first` is the birthing (or first) parent.
+
+    Each bundle has a timeline and the weekly hours for its working months: the parent's planned
+    part-time hours if they fit the rule (Bonus 24–32 h, Plus with work up to 32 h), else 24 h."""
 
     def blank() -> list[list[str]]:
         return [["none"] * MAX_LM for _ in range(n_parents)]
@@ -611,35 +616,61 @@ def presets(n_parents: int, first: int, single_parent_4c: bool) -> list[dict]:
         for lm in range(frm, to + 1):
             tl[i][lm - 1] = kind
 
+    def hours_for(tl: list[list[str]]) -> list[list[Decimal | None]]:
+        out: list[list[Decimal | None]] = []
+        for i, row in enumerate(tl):
+            planned = part_time_hours[i] if part_time_hours and i < len(part_time_hours) else ZERO
+            bonus = planned if BONUS_MIN_H <= planned <= BONUS_MAX_H else Decimal(24)
+            work = planned if 0 < planned <= BONUS_MAX_H else Decimal(24)
+            out.append([bonus if t == "bonus" else work if t == "plus_tz" else None for t in row])
+        return out
+
     out = []
+
+    def add(id_: str, name: str, description: str, tl: list[list[str]]) -> None:
+        out.append({"id": id_, "name": name, "description": description, "timeline": tl, "hours": hours_for(tl)})
+
     if n_parents == 2:
         a, b = first, 1 - first
         tl = blank(); fill(tl, a, 1, 12, "basis"); fill(tl, b, 13, 14, "basis")
-        out.append({"id": "classic", "name": "Classic: 12 + 2 Basis months",
-                    "description": "One parent 12 Basis months, the other the 2 Partnermonate afterwards.", "timeline": tl})
+        add("classic", "Classic: 12 + 2 Basis months",
+            "One parent 12 Basis months, the other the 2 Partnermonate afterwards. The most Elterngeld per month "
+            "at home.", tl)
         tl = blank(); fill(tl, a, 1, 7, "basis"); fill(tl, b, 8, 14, "basis")
-        out.append({"id": "split", "name": "Split: 7 + 7 Basis months",
-                    "description": "Both parents take 7 Basis months one after the other.", "timeline": tl})
+        add("split", "Split: 7 + 7 Basis months", "Both parents take 7 Basis months one after the other.", tl)
         tl = blank(); fill(tl, a, 1, 6, "basis"); fill(tl, a, 7, 18, "plus"); fill(tl, b, 13, 14, "basis")
-        out.append({"id": "plus", "name": "Longer: Basis + ElterngeldPlus",
-                    "description": "6 Basis then 12 Plus months for one parent (until month 18); the other parent "
-                                   "takes 2 Basis months. Same budget, spread over a longer time.", "timeline": tl})
+        add("plus", "Longer: Basis + ElterngeldPlus",
+            "6 Basis then 12 Plus months for one parent (until month 18); the other parent takes 2 Basis months. "
+            "Same budget, spread over a longer time.", tl)
         tl = blank(); fill(tl, a, 1, 12, "basis"); fill(tl, b, 13, 14, "basis")
         fill(tl, a, 15, 18, "bonus"); fill(tl, b, 15, 18, "bonus")
-        out.append({"id": "bonus", "name": "Classic + Partnerschaftsbonus",
-                    "description": "Classic plan plus 4 bonus months for each parent (months 15–18) while both work "
-                                   "24–32 h/week.", "timeline": tl})
+        add("bonus", "Classic + Partnerschaftsbonus",
+            "Classic plan plus 4 bonus months for each parent (months 15–18) while both work 24–32 h/week. Pays off "
+            "only if you want fewer hours anyway – with good pay the lost salary can exceed the bonus.", tl)
+        tl = blank(); fill(tl, a, 1, 12, "basis"); fill(tl, b, 3, 6, "plus")
+        fill(tl, a, 15, 18, "bonus"); fill(tl, b, 15, 18, "bonus")
+        add("together", "Together at home + bonus",
+            "Classic for one parent; the other is at home too in months 3–6 on ElterngeldPlus (which may overlap "
+            "with Basis), then both take the bonus in months 15–18.", tl)
+        tl = blank(); fill(tl, a, 1, 2, "basis"); fill(tl, a, 3, 22, "plus"); fill(tl, b, 13, 14, "basis")
+        add("long", "Long leave: Plus at home until month 22",
+            "One parent stays at home on ElterngeldPlus until month 22; the other takes 2 Basis months. The same "
+            "Elterngeld as the classic plan over almost twice the time – but more salary lost.", tl)
+        tl = blank(); fill(tl, a, 1, 2, "basis"); fill(tl, a, 3, 12, "plus_tz"); fill(tl, b, 13, 14, "basis")
+        fill(tl, a, 15, 18, "bonus"); fill(tl, b, 15, 18, "bonus")
+        add("early", "Back to work early (part-time)",
+            "One parent works part-time from month 3 on ElterngeldPlus, the other takes 2 Basis months, then both "
+            "take the bonus. Most salary; with good part-time pay Plus drops to the 150 € minimum.", tl)
     else:
         a = 0
         cap = 14 if single_parent_4c else 12
         tl = blank(); fill(tl, a, 1, cap, "basis")
-        out.append({"id": "basis", "name": f"{cap} Basis months", "description": "All Basis months in one go.", "timeline": tl})
+        add("basis", f"{cap} Basis months", "All Basis months in one go.", tl)
         half = cap // 2
         tl = blank(); fill(tl, a, 1, half, "basis"); fill(tl, a, half + 1, half + cap, "plus")
-        out.append({"id": "plus", "name": "Longer: Basis + ElterngeldPlus",
-                    "description": f"{half} Basis then {cap} Plus months – same budget, longer coverage.", "timeline": tl})
+        add("plus", "Longer: Basis + ElterngeldPlus", f"{half} Basis then {cap} Plus months – same budget, longer coverage.", tl)
         if single_parent_4c:
             tl = blank(); fill(tl, a, 1, cap, "basis"); fill(tl, a, 15, 18, "bonus")
-            out.append({"id": "bonus", "name": "Basis + Partnerschaftsbonus (§ 4c)",
-                        "description": "14 Basis months plus 4 bonus months while working 24–32 h/week.", "timeline": tl})
+            add("bonus", "Basis + Partnerschaftsbonus (§ 4c)",
+                "14 Basis months plus 4 bonus months while working 24–32 h/week.", tl)
     return out
