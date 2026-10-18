@@ -52,7 +52,7 @@ h2, h3 { line-height: 1.25; }
 /* ---------- page frame ---------- */
 .masthead { max-width: 1280px; margin: 0 auto; padding: 40px 24px 8px; }
 .masthead h1 { font-size: 2.6rem; line-height: 1.1; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 12px; color: var(--official); }
-.masthead p { max-width: 68ch; margin: 0; color: var(--muted); }
+.masthead p { margin: 0; color: var(--muted); }
 .masthead p.disclaimer-short {
   margin-top: 14px; padding: 10px 14px; border-left: 3px solid var(--amber);
   background: var(--amber-soft); color: var(--ink); border-radius: var(--radius-sm); font-size: .92rem;
