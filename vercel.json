@@ -1,12 +1,28 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["fra1"],
-  "functions": {
-    "backend/app/main.py": {
-      "maxDuration": 10,
-      "excludeFiles": "{public/**,backend/tests/**,tools/**,docs/**,.playwright-mcp/**,**/__pycache__/**,**/.pytest_cache/**,backend/requirements*.txt,backend/pytest.ini,Dockerfile,docker-compose.yml,README.md}"
+  "services": {
+    "web": {
+      "root": "public"
+    },
+    "api": {
+      "root": ".",
+      "framework": "fastapi",
+      "entrypoint": "backend.app.main:app",
+      "functions": {
+        "backend/app/main.py": {
+          "maxDuration": 10,
+          "excludeFiles": "{public/**,backend/tests/**,tools/**,docs/**,.playwright-mcp/**,**/__pycache__/**,**/.pytest_cache/**,backend/requirements*.txt,backend/pytest.ini,Dockerfile,docker-compose.yml,README.md}"
+        }
+      }
     }
   },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "api" } },
+    { "source": "/docs", "destination": { "service": "api" } },
+    { "source": "/openapi.json", "destination": { "service": "api" } },
+    { "source": "/(.*)", "destination": { "service": "web" } }
+  ],
   "headers": [
     {
       "source": "/api/(.*)",
