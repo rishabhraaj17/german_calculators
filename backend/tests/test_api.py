@@ -446,3 +446,16 @@ def test_payslip_mode_in_analysis():
 def test_payslip_year_to_date_cannot_be_below_the_month():
     zve = {"mode": "payslip", "payslips": [_payslip(rv_ytd=100), _payslip()]}
     assert client.post("/api/analyse", json={**COUPLE, "zve": zve}).status_code == 422
+
+
+def test_fix_search_scores_a_bounded_number_of_candidates(monkeypatch):
+    # an invalid plan with many valid one-month fixes must not trigger one full evaluation per candidate
+    from app import service as S
+    calls = []
+    real = S._plan
+    monkeypatch.setattr(S, "_plan", lambda *a, **kw: calls.append(1) or real(*a, **kw))
+    tl = [["plus"] * 13 + ["none"] * 23, ["basis"] + ["none"] * 35]
+    parents = [{**p, "part_time_hours": 28} for p in COUPLE["parents"]]
+    r = client.post("/api/analyse", json={**COUPLE, "parents": parents, "timeline": tl}).json()
+    assert not r["plan"]["valid"] and r["plan"]["fixes"]
+    assert sum(calls) <= S.MAX_SCORED_FIXES + 15  # + the plan itself, presets and tax-class scenarios

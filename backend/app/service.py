@@ -394,6 +394,7 @@ def _plan(req: AnalyseRequest, outcomes: list[ParentOutcome], timeline: list[lis
 
 
 MAX_FIXES = 3
+MAX_SCORED_FIXES = 24  # full evaluations per request for fix suggestions (~5 ms each)
 
 
 def _plan_fixes(req: AnalyseRequest, outcomes: list[ParentOutcome], plan: PlanResult) -> list[dict]:
@@ -404,6 +405,11 @@ def _plan_fixes(req: AnalyseRequest, outcomes: list[ParentOutcome], plan: PlanRe
     contexts, kw = _plan_inputs(req, outcomes)
     kw.pop("gb_active")
     candidates = candidate_fixes(plan.timeline, contexts, hours=req.hours, **kw)
+    # bounded work per request: pre-rank by the Elterngeld months a candidate keeps (Basis = 2 Plus),
+    # then run the full money calculation only for the most promising ones
+    weight = {"basis": 2, "plus": 1, "plus_tz": 1, "bonus": 1}
+    candidates.sort(key=lambda c: -sum(weight.get(t, 0) for row in c["timeline"] for t in row))
+    candidates = candidates[:MAX_SCORED_FIXES]
     scored = []
     for c in candidates:
         r = _plan(req, outcomes, c["timeline"], hours=c["hours"])
