@@ -269,6 +269,19 @@ body { padding-bottom: 96px; }
 .verdict.not_met .headline { color: var(--red); }
 .verdict.conditional .headline { color: var(--amber); }
 
+.zve-breakdown { margin: 12px 0; }
+.zve-breakdown summary { cursor: pointer; font-weight: 600; }
+.zve-breakdown table { margin: 8px 0; width: 100%; max-width: 520px; }
+.zve-breakdown tr.total td { border-top: 1px solid currentColor; }
+.zve-breakdown ul { margin: 4px 0 0; padding-left: 18px; font-size: 0.9em; }
+
+.plan-alert { border: 2px solid var(--red); border-radius: var(--radius-sm); padding: 16px; margin: 0 0 16px; }
+.card.plan-alert { padding: 20px 24px; }
+.plan-alert-title { color: var(--red); font-weight: 700; margin: 0 0 8px; }
+.plan-alert ul.fixes { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 8px; }
+.plan-alert ul.fixes li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+button.fix-apply { background: var(--official); color: #fff; border: 0; border-radius: var(--radius-sm); padding: 8px 14px; font-weight: 600; }
+
 .gauge { margin: 24px 0 8px; }
 .gauge .track { position: relative; height: 14px; border-radius: 7px;
   background: linear-gradient(90deg, var(--official-soft) 0 var(--cap), var(--red-soft) var(--cap) 100%); }
@@ -359,8 +372,8 @@ ul.checks li { margin-bottom: 6px; display: flex; gap: 8px; }
 body.single .only-two, body:not(.single) .only-single { display: none !important; }
 body:not(.married) .only-married { display: none !important; }
 .mode { display: none !important; }
-body.mode-quick .mode.mode-quick, body.mode-estimate .mode.mode-estimate, body.mode-bescheid .mode.mode-bescheid { display: grid !important; }
-body.mode-estimate #zve-persons.mode-estimate { display: block !important; }
+body.mode-quick .mode.mode-quick, body.mode-estimate .mode.mode-estimate, body.mode-bescheid .mode.mode-bescheid, body.mode-payslip .mode.mode-payslip { display: grid !important; }
+body.mode-estimate #zve-persons.mode-estimate, body.mode-payslip #zve-payslips.mode-payslip { display: block !important; }
 .faktor { display: none; }
 .parent.has-faktor .faktor { display: grid; }
 .mode-bescheid-hint { display: none; }
@@ -506,6 +519,7 @@ button.bonus-add { margin-top: 4px; background: var(--bonus); color: #fff; borde
 /* vacation, pension, health cards */
 .private-premium { display: none; }
 .parent.is-private .private-premium { display: grid; }
+.parent.bonus-monthly .one-off-only { display: none; }
 .card.social h3 { margin: 20px 0 8px; font-size: 1rem; display: flex; align-items: baseline; gap: 8px; }
 .card.social td small { display: block; color: var(--muted); font-size: .76rem; }
 .card.social td.pos { color: var(--official); font-weight: 600; }

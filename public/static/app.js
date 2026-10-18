@@ -18,6 +18,8 @@ function addParent(index, name, birthing) {
   $("[name=steuerklasse]", node).addEventListener("change", (e) =>
     node.classList.toggle("has-faktor", e.target.value === "IV_FAKTOR"));
   $("[name=kv_art]", node).addEventListener("change", (e) => node.classList.toggle("is-private", e.target.value === "privat"));
+  $("[name=bonus_payment]", node).addEventListener("change", (e) =>
+    node.classList.toggle("bonus-monthly", e.target.value === "monthly"));
   $("[name=aufenthalt]", node).addEventListener("change", (e) =>
     node.classList.toggle("show-permit", e.target.value === "ae_humanitaer"));
   $("[name=birthing_parent]", node).addEventListener("change", (e) => {
@@ -40,6 +42,14 @@ function addParent(index, name, birthing) {
     $("h3", z).textContent = `${e.target.value || name} – Lohnsteuerbescheinigung of the year before birth`;
   });
   $("#zve-persons").append(z);
+
+  const ps = $("#tpl-payslip-person").content.firstElementChild.cloneNode(true);
+  ps.dataset.index = index;
+  const psTitle = (n) => `${n} – payslip`;
+  $("h3", ps).textContent = psTitle(name);
+  $(".name", node).addEventListener("input", (e) => { $("h3", ps).textContent = psTitle(e.target.value || name); });
+  $("[name=month]", ps).value = String(Math.max(new Date().getMonth(), 1)); // last completed month
+  $("#zve-payslips").append(ps);
 }
 addParent(0, "Parent A", true);
 addParent(1, "Parent B", false);
@@ -54,11 +64,12 @@ function syncHousehold() {
   document.body.classList.toggle("married", h === "married");
   const second = $$(".parent")[1];
   second.hidden = h === "single";
-  $$(".zve-person")[1].hidden = h === "single";
+  $$("#zve-persons .zve-person")[1].hidden = h === "single";
+  $$(".payslip-person")[1].hidden = h === "single";
   $("#n-cap").textContent = h === "single" ? "4" : "5";
 }
 function syncMode() {
-  ["quick", "estimate", "bescheid"].forEach((m) => document.body.classList.toggle(`mode-${m}`, form.zve_mode.value === m));
+  ["quick", "estimate", "bescheid", "payslip"].forEach((m) => document.body.classList.toggle(`mode-${m}`, form.zve_mode.value === m));
 }
 form.addEventListener("change", (e) => {
   if (e.target.name === "household") { syncHousehold(); currentTimeline = null; currentHours = null; currentKez = null; }
@@ -68,6 +79,7 @@ function syncCapYear() {
   const year = Number((form.birth_date.value || "").slice(0, 4)) - 1;
   const ok = year >= 2025;
   $$(".cap-year").forEach((el) => { el.textContent = ok ? `for ${year}` : ""; });
+  $$(".cap-year-plain").forEach((el) => { el.textContent = ok ? String(year) : "the year before birth"; });
   $("#cap-year-hint").textContent = ok
     ? `For this birth only the Steuerbescheid for ${year} counts. An assessment for ${year - 1} or earlier is not accepted, and if no ${year} assessment exists yet, Elterngeld is paid provisionally and reclaimed if the ${year} zvE exceeds the cap (§ 1 Abs. 8, § 8 Abs. 2 BEEG).`
     : "Use the Steuerbescheid of the calendar year before birth – an older one does not count (§ 1 Abs. 8 BEEG).";
@@ -101,7 +113,8 @@ function parentPayload(node) {
     erwerbsart: v("erwerbsart").value,
     monthly_gross: num(v("monthly_gross")) ?? 0,
     bonuses_annual: num(v("bonuses_annual")) ?? 0,
-    bonuses_pending: num(v("bonuses_pending")) ?? 0,
+    bonus_payment: v("bonus_payment").value,
+    bonuses_pending: v("bonus_payment").value === "one_off" ? num(v("bonuses_pending")) ?? 0 : 0,
     bav_monthly: num(v("bav_monthly")) ?? 0,
     steuerklasse: v("steuerklasse").value,
     faktor: num(v("faktor")) ?? 1,
@@ -133,7 +146,7 @@ function parentPayload(node) {
 
 function zvePersonPayload(node) {
   const out = {};
-  $$("input", node).forEach((i) => {
+  $$("input, select", node).forEach((i) => {
     if (i.type === "checkbox") out[i.name] = i.checked;
     else if (i.value !== "") out[i.name] = Number(i.value);
   });
@@ -145,7 +158,7 @@ function buildRequest() {
   const parents = $$(".parent").filter((p) => !p.hidden).map(parentPayload);
   const mode = form.zve_mode.value;
   const zve = {
-    mode: mode === "bescheid" ? "bescheid" : "estimate",
+    mode: mode === "bescheid" || mode === "payslip" ? mode : "estimate",
     zusammenveranlagung: form.zusammenveranlagung.value === "joint",
     kinderfreibetrag_zaehler: num(form.kinderfreibetrag_zaehler) ?? 0,
     alleinerziehend: single && (num(form.kinder_im_haushalt) ?? 0) > 0, // § 24b EStG
@@ -155,8 +168,14 @@ function buildRequest() {
     zve.bescheid_values = [num(form.bescheid_0), single ? null : num(form.bescheid_1)].filter((x) => x !== null);
     zve.bescheid_kfb_abgezogen = form.bescheid_kfb_abgezogen.checked;
   }
+  if (mode === "payslip") {
+    const slips = $$(".payslip-person").filter((z) => !z.hidden).map(zvePersonPayload);
+    // nothing entered -> quick estimate instead of a zvE of 0 €
+    if (slips.some((p) => Object.entries(p).some(([k, v]) => k !== "month" && v))) zve.payslips = slips;
+    else zve.mode = "estimate";
+  }
   if (mode === "estimate") {
-    const persons = $$(".zve-person").filter((z) => !z.hidden).map(zvePersonPayload);
+    const persons = $$("#zve-persons .zve-person").filter((z) => !z.hidden).map(zvePersonPayload);
     // all fields empty -> fall back to the quick estimate instead of a misleading zvE of 0 €
     const hasData = persons.some((p) => Object.values(p).some((v) => typeof v === "number" && v !== 0));
     if (hasData) zve.persons = persons;
@@ -263,7 +282,7 @@ function fillForm(data) {
   const nodes = $$(".parent");
   (req.parents || []).slice(0, 2).forEach((p, i) => {
     const node = nodes[i];
-    ["label", "birthing_parent", "erwerbsart", "monthly_gross", "bonuses_annual", "bonuses_pending", "bav_monthly", "steuerklasse",
+    ["label", "birthing_parent", "erwerbsart", "monthly_gross", "bonuses_annual", "bonus_payment", "bonuses_pending", "bav_monthly", "steuerklasse",
       "faktor", "kirchensteuer", "include_mutterschutz_months", "part_time_other_employer", "kinderfreibetraege", "net_monthly", "vacation_days", "private_premium", "part_time_gross", "part_time_hours", "weekly_hours",
     ].forEach((k) => setField(node, k, p[k]));
     setField(node, "extra_excluded_months", (p.extra_excluded_months || []).join(", "));
@@ -277,19 +296,25 @@ function fillForm(data) {
     node.classList.toggle("has-faktor", p.steuerklasse === "IV_FAKTOR");
     node.classList.toggle("show-permit", b.aufenthalt === "ae_humanitaer");
     node.classList.toggle("is-private", p.kv_art === "privat");
+    node.classList.toggle("bonus-monthly", p.bonus_payment === "monthly");
     $("[name=label]", node).dispatchEvent(new Event("input"));
     node.syncPartTime?.();
   });
 
   const z = req.zve || {};
-  const mode = data.zve_mode || (z.mode === "bescheid" ? "bescheid" : z.persons?.length ? "estimate" : "quick");
+  const mode = data.zve_mode || (z.mode === "bescheid" ? "bescheid" : z.payslips?.length ? "payslip"
+    : z.persons?.length ? "estimate" : "quick");
   $$("[name=zve_mode]").forEach((r) => { r.checked = r.value === mode; });
   ["kinderfreibetrag_zaehler", "alleinerziehend", "kinder_im_haushalt"].forEach((k) => setField(form, k, z[k]));
   form.zusammenveranlagung.value = z.zusammenveranlagung === false ? "separate" : "joint";
   setField(form, "bescheid_0", z.bescheid_values?.[0] ?? "");
   setField(form, "bescheid_1", z.bescheid_values?.[1] ?? "");
   form.bescheid_kfb_abgezogen.checked = z.bescheid_kfb_abgezogen !== false;
-  const zNodes = $$(".zve-person");
+  $$(".payslip-person").forEach((node, i) => {
+    const slip = z.payslips?.[i] || {};
+    $$("input, select", node).forEach((el) => { if (slip[el.name] !== undefined) el.value = slip[el.name]; });
+  });
+  const zNodes = $$("#zve-persons .zve-person");
   (z.persons || []).slice(0, 2).forEach((person, i) => {
     $$("input", zNodes[i]).forEach((el) => {
       if (el.type === "checkbox") el.checked = Boolean(person[el.name]);
@@ -394,7 +419,7 @@ function verdict(r) {
   const max = Math.max(cap * 1.4, zve * 1.1);
   const capPct = (cap / max) * 100;
   const youPct = Math.min((zve / max) * 100, 100);
-  const src = { steuerbescheid: "from your Steuerbescheid", estimate: "estimated from your Lohnsteuerbescheinigung", quick_estimate: "quick estimate from monthly pay and bonuses" }[r.income_cap.source];
+  const src = { steuerbescheid: "from your Steuerbescheid", estimate: "estimated from your Lohnsteuerbescheinigung", quick_estimate: "quick estimate from monthly pay and bonuses", payslip: "extrapolated from your payslip" }[r.income_cap.source];
   const failing = r.eligibility.flatMap((e) => e.checks.filter((c) => c.status !== "met").map((c) => ({ ...c, who: e.label })));
   const uniqueFailing = [...new Map(failing.map((c) => [c.id + (c.id === "income_cap" ? "" : c.who), c])).values()];
   return `<div class="card verdict ${overall}">
@@ -405,8 +430,27 @@ function verdict(r) {
       <div class="scale"><span>0 €</span><span>Cap ${eur(cap, false)}</span><span>${eur(max, false)}</span></div>
     </div>
     ${uniqueFailing.filter((c) => c.id !== "income_cap").map((c) => `<p class="failing"><span class="dot ${c.status}"></span><span><strong>${esc(c.who)}: ${esc(c.title)}</strong> – ${esc(c.explanation)} <span class="hint">${esc(c.legal_basis)}</span></span></p>`).join("")}
+    ${zveBreakdown(r.income_cap.detail)}
     ${gapBlock(r.income_cap.gap_analysis)}
   </div>`;
+}
+
+function zveBreakdown(d) {
+  if (!d) return "";
+  const lines = [
+    ["Income from employment (gross − Werbungskosten)", d.einkuenfte_nichtselbstaendig, ""],
+    ["Other income", d.andere_einkuenfte, ""],
+    ["Single-parent relief", d.entlastungsbetrag_alleinerziehende, "−"],
+    ["Pension contributions", d.altersvorsorge, "−"],
+    ["Health and care insurance", d.kranken_pflege_sonstige_vorsorge, "−"],
+    ["Other Sonderausgaben", d.uebrige_sonderausgaben, "−"],
+    ["Extraordinary burdens", d.aussergewoehnliche_belastungen, "−"],
+    ["Freibeträge für Kinder", d.freibetraege_fuer_kinder, "−"],
+  ].filter(([, v]) => Number(v));
+  return `<details class="zve-breakdown"><summary>How the zvE is calculated</summary>
+    <table>${lines.map(([t, v, sign]) => `<tr><td>${sign} ${t}</td><td class="num">${eur(v, false)}</td></tr>`).join("")}
+      <tr class="total"><td>= zvE</td><td class="num"><strong>${eur(d.zve, false)}</strong></td></tr></table>
+    <ul>${d.hinweise.map((h) => `<li>${esc(h)}</li>`).join("")}</ul></details>`;
 }
 
 function gapBlock(g) {
@@ -649,6 +693,28 @@ function bonusNotice(r) {
   </div>`;
 }
 
+const FIX_TYPE = { none: "nothing", basis: "Basis", plus: "Plus", plus_tz: "Plus + work", bonus: "Bonus", ez: "leave only" };
+
+function fixText(r, f) {
+  return f.changes.map((c) => `${esc(r.parents[c.parent].label)}, month ${c.lm}: ${FIX_TYPE[c.from]} → <strong>${FIX_TYPE[c.to]}</strong>`).join("; ");
+}
+
+/** Invalid month plan: the broken rules and the best one-month changes that fix it. */
+function planAlert(r, inPlanner) {
+  const p = r.plan;
+  if (p.valid) return "";
+  const errs = p.errors.map((e) => `<li><span class="dot not_met"></span>${esc(e)}</li>`).join("");
+  const fixes = p.fixes.map((f, k) => `<li><span>${fixText(r, f)} – household ${eur(f.household_total, false)}</span>
+      <button type="button" class="fix-apply" data-fix="${k}">${k === 0 ? "Apply best fix" : "Apply"}</button></li>`).join("");
+  return `<div class="${inPlanner ? "" : "card "}plan-alert" role="alert">
+    <p class="plan-alert-title">This month plan is not possible – the amounts below are provisional</p>
+    <ul class="checks">${errs}</ul>
+    ${fixes ? `<p><strong>Suggested fix${p.fixes.length > 1 ? "es" : ""}</strong> (changes one month, keeps the rules):</p><ul class="fixes">${fixes}</ul>`
+      : "<p>No single-month change fixes it. Pick a starting point in the planner and adjust from there.</p>"}
+    ${inPlanner ? "" : '<p><a href="#plan">Open the planner</a></p>'}
+  </div>`;
+}
+
 function planner(r) {
   const p = r.plan;
   const n = r.parents.length;
@@ -701,13 +767,13 @@ function planner(r) {
     ? `<li><span class="swatch mg-swatch">+</span><span><strong>+ … MG</strong> Mutterschaftsgeld incl. employer top-up; Elterngeld is reduced by it</span></li>` : "";
   const payKey = "";
   const key = `<ul class="legend-key">${TYPE_KEY.map(([k, short, long]) => `<li><span class="swatch t-${k}"></span><span><strong>${short}</strong> ${long}</span></li>`).join("")}${mgKey}${payKey}</ul>`;
-  const errs = p.errors.map((e) => `<li><span class="dot not_met"></span>${esc(e)}</li>`).join("");
   const notes = p.notes.map((e) => `<li><span class="dot conditional"></span>${esc(e)}</li>`).join("");
 
   return `<div class="card planner" id="plan"><h2>Plan Elterngeld and Elternzeit</h2>
     <p class="hint">Pick a starting point, then change single months and the hours you work. Salary is calculated from your gross pay and contract hours; Elterngeld in months with work uses the average income of all Basis months, or of all Plus and Bonus months, with work (§ 2 Abs. 3 BEEG). 1 Basis month = 2 Plus months.</p>
     <div class="presets">${presets}</div>
-    ${errs || notes ? `<ul class="checks">${errs}${notes}</ul>` : ""}
+    ${planAlert(r, true)}
+    ${notes ? `<ul class="checks">${notes}</ul>` : ""}
     ${budget(r)}
     ${bonusNotice(r)}
     ${key}
@@ -949,7 +1015,7 @@ function recs(r) {
 function render(r) {
   window.__lastResult = r;
   $("#plan-section").innerHTML = planner(r) + socialCards(r);
-  $("#results").innerHTML = verdict(r) + amounts(r) + mutterschutz(r) + `<p class="plan-link"><a href="#plan">Plan months, hours and Elternzeit below</a></p>` + recs(r) +
+  $("#results").innerHTML = verdict(r) + planAlert(r, false) + amounts(r) + mutterschutz(r) + `<p class="plan-link"><a href="#plan">Plan months, hours and Elternzeit below</a></p>` + recs(r) +
     `<p class="hint">Calculated with the official BMF Lohnsteuer program ${r.scope.tax_year_before_birth}, average KV-Zusatzbeitrag ${String(r.scope.kv_zusatzbeitrag_used_pct).replace(".", ",")} %. This is not legal or tax advice; the Elterngeldstelle decides.</p>`;
   refreshNav();
 }
@@ -1006,4 +1072,14 @@ $("#theme-switch").addEventListener("click", () => {
     if (next === "auto") localStorage.removeItem("theme");
     else localStorage.setItem("theme", next);
   } catch { /* the choice then lasts for this page view only */ }
+});
+
+// apply a suggested fix for an invalid month plan (banner in the results or in the planner)
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-fix]");
+  if (!btn || !window.__lastResult) return;
+  const fix = window.__lastResult.plan.fixes[Number(btn.dataset.fix)];
+  currentTimeline = fix.timeline.map((row) => row.slice());
+  currentHours = fix.hours.map((row) => row.slice());
+  runAnalysis({ keepScroll: true });
 });

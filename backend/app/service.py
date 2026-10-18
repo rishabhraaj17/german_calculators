@@ -24,9 +24,10 @@ from .elterngeld import (
     monatsbetraege,
 )
 from .fmt import eur
-from .models import AnalyseRequest, ParentIn, ZvEPersonIn
+from .models import AnalyseRequest, ParentIn, PayslipPersonIn, ZvEPersonIn
 from .mutterschutz import Mutterschaftsgeld, estimate_net_monthly, mutterschaftsgeld
-from .plan import EG_TYPES, MaternityCredit, ParentContext, PlanResult, add_months, evaluate, from_counts
+from .plan import (EG_TYPES, MaternityCredit, ParentContext, PlanResult, add_months, candidate_fixes, evaluate,
+                   from_counts)
 from .plan import presets as plan_presets
 from . import sozial
 from .zve import ZvEHaushalt, ZvEPerson, freibetraege_fuer_kinder, schaetze_zve
@@ -95,12 +96,85 @@ def elterngeld_brutto(p: ParentIn, ty: P.TaxYear) -> Decimal:
     return max(p.average_gross - bav_tax_free_monthly(p, ty), ZERO)
 
 
-def _quick_zve_person(p: ParentIn, ty: P.TaxYear) -> ZvEPersonIn:
+def pv_an_rate(children: int) -> Decimal:
+    """Employee care-insurance rate: + 0,6 % childless surcharge (§ 55 Abs. 3 SGB XI), − 0,25 % per child
+    from the 2nd to the 5th (§ 55 Abs. 3a). Assumes parents aged 23 or older."""
+    if children == 0:
+        return P.PV_AN_RATE + P.PV_CHILDLESS
+    return P.PV_AN_RATE - P.PV_CHILD_REDUCTION * (min(children, 5) - 1)
+
+
+def _children_in_cap_year(req: AnalyseRequest, ty: P.TaxYear) -> int:
+    """Children already born in the cap year (the expected child is born the year after)."""
+    return sum(1 for s in req.siblings if s.birth_date <= date(ty.year, 12, 31))
+
+
+def _private_kv(p: ParentIn, ty: P.TaxYear, kv_base: Decimal) -> tuple[Decimal, Decimal]:
+    """(annual private premium, tax-free employer subsidy) – § 257 Abs. 2 SGB V: half the premium,
+    at most the employer share of the GKV rate on the salary up to the ceiling."""
+    if _kv_art(p) != "privat" or not p.private_premium:
+        return ZERO, ZERO
+    premium = p.private_premium * 12
+    if p.erwerbsart != Erwerbsart.ANGESTELLT:
+        return premium, ZERO
+    max_subsidy = min(kv_base, ty.bbg_kv) * (P.KV_GENERAL / 2 + ty.avg_kv_zusatzbeitrag_pct / 200 + P.PV_TOTAL / 2)
+    return premium, cent(min(premium / 2, max_subsidy))
+
+
+def annualise_payslip(ps: PayslipPersonIn, p: ParentIn, ty: P.TaxYear) -> ZvEPersonIn:
+    """Full cap year from one payslip: Jan–month as paid (year to date), the remaining months at this
+    month's values, plus one-off payments still due. Their contributions only fill the room left under
+    the annual ceilings, at this month's effective rates."""
+    rest = 12 - ps.month
+    sv_gross = ps.brutto_ytd + rest * ps.brutto_month  # Steuer-Brutto as a proxy for the SV gross
+
+    def annual(ytd: Decimal, month: Decimal, ceiling: Decimal) -> Decimal:
+        base_month = min(ps.brutto_month, ceiling / 12)
+        rate = month / base_month if base_month > 0 else ZERO
+        room = max(ceiling - sv_gross, ZERO)
+        return cent(ytd + rest * month + min(ps.one_off_due, room) * rate)
+
+    rv = annual(ps.rv_ytd, ps.rv_month, ty.bbg_rv)
+    premium, subsidy = _private_kv(p, ty, ty.bbg_kv)
+    return ZvEPersonIn(
+        jahresbrutto=ps.brutto_ytd + rest * ps.brutto_month + ps.one_off_due,
+        werbungskosten=ps.werbungskosten,
+        rv_arbeitnehmer=rv,
+        rv_arbeitgeber=rv,  # same rate for employer and employee (§ 168 SGB VI)
+        kv_arbeitnehmer=annual(ps.kv_ytd, ps.kv_month, ty.bbg_kv),
+        pv_arbeitnehmer=annual(ps.pv_ytd, ps.pv_month, ty.bbg_kv),
+        alv_arbeitnehmer=annual(ps.alv_ytd, ps.alv_month, ty.bbg_rv),
+        krankengeldanspruch=ps.kv_month > 0,
+        private_kv_pv_basis=premium,
+        private_kv_ag_zuschuss=subsidy,
+        rv_frei_mit_versorgung=p.erwerbsart == Erwerbsart.BEAMT,
+        pending_one_off=ps.one_off_due,
+        bav_existing=cent(p.bav_monthly * 12),
+    )
+
+
+def _payslip_notes(req: AnalyseRequest, payslips: list[PayslipPersonIn], ty: P.TaxYear) -> list[str]:
+    notes = []
+    for ps, p in zip(payslips, req.parents):
+        due = f", plus {eur(ps.one_off_due)} one-off payments still due" if ps.one_off_due else ""
+        rest = (f"{ps.month + 1:02d}–12/{ty.year} at that month's values" if ps.month < 12
+                else "no months left to extrapolate")
+        notes.append(f"{p.label}: from the payslip of {ps.month:02d}/{ty.year} – 01–{ps.month:02d}/{ty.year} as paid, "
+                     f"{rest}{due}.")
+        if p.monthly_gross and ps.brutto_month > p.monthly_gross * Decimal("1.5"):
+            notes.append(f"{p.label}: this month's gross ({eur(ps.brutto_month)}) is far above the regular monthly "
+                         "pay – if it contains a one-off payment, use a regular month's payslip, or the rest of the "
+                         "year is overstated.")
+    notes.append("Replace these figures with the Lohnsteuerbescheinigung once you have it (usually by end of February).")
+    return notes
+
+
+def _quick_zve_person(p: ParentIn, ty: P.TaxYear, children: int = 0) -> ZvEPersonIn:
     """Rough annual figures from the monthly gross plus one-off payments, minus the
     tax-free company pension conversion (used if no Lohnsteuerbescheinigung data was entered)."""
     if p.erwerbsart == Erwerbsart.MINIJOB:
         return ZvEPersonIn()  # flat-taxed (§ 40a Abs. 2 EStG): not part of the zvE
-    gross = p.average_gross * 12 + p.bonuses_annual
+    gross = p.average_gross * 12 + p.one_off_annual
     bav = p.bav_monthly * 12
     jb = cent(max(gross - min(bav, ty.bbg_rv * P.BAV_TAX_FREE_SHARE_OF_BBG), ZERO))
     sv_gross = max(gross - min(bav, ty.bbg_rv * P.BAV_SV_FREE_SHARE_OF_BBG), ZERO)  # § 1 Abs. 1 Nr. 9 SvEV
@@ -109,23 +183,19 @@ def _quick_zve_person(p: ParentIn, ty: P.TaxYear) -> ZvEPersonIn:
     kv_base = min(sv_gross, ty.bbg_kv)
     # compulsory and voluntary members alike pay the employee share (§ 10 Abs. 1 Nr. 3 EStG)
     gkv = angestellt and _kv_art(p) != "privat"
-    premium = p.private_premium * 12 if _kv_art(p) == "privat" and p.private_premium else ZERO
-    subsidy = ZERO
-    if premium and angestellt:  # § 257 Abs. 2 SGB V: half the premium, at most the employer share of the GKV rate
-        max_subsidy = kv_base * (P.KV_GENERAL / 2 + ty.avg_kv_zusatzbeitrag_pct / 200 + P.PV_TOTAL / 2)
-        subsidy = cent(min(premium / 2, max_subsidy))
+    premium, subsidy = _private_kv(p, ty, kv_base)
     return ZvEPersonIn(
         jahresbrutto=jb,
         rv_arbeitnehmer=cent(rv_base * ty.rv_rate_total / 2) if angestellt else ZERO,
         rv_arbeitgeber=cent(rv_base * ty.rv_rate_total / 2) if angestellt else ZERO,
         kv_arbeitnehmer=cent(kv_base * (P.KV_AN_GENERAL_RATE + ty.avg_kv_zusatzbeitrag_pct / 200)) if gkv else ZERO,
-        pv_arbeitnehmer=cent(kv_base * P.PV_AN_RATE) if gkv else ZERO,
+        pv_arbeitnehmer=cent(kv_base * pv_an_rate(children)) if gkv else ZERO,
         alv_arbeitnehmer=cent(rv_base * P.ALV_AN_RATE) if angestellt else ZERO,
         krankengeldanspruch=gkv,
         private_kv_pv_basis=premium,
         private_kv_ag_zuschuss=subsidy,
         rv_frei_mit_versorgung=p.erwerbsart == Erwerbsart.BEAMT,
-        pending_one_off=p.bonuses_pending,
+        pending_one_off=p.one_off_pending,
         bav_existing=cent(bav),
     )
 
@@ -278,10 +348,8 @@ def _work_amounts(req: AnalyseRequest, o: "ParentOutcome"):
 _FROM_REQUEST = object()
 
 
-def _plan(req: AnalyseRequest, outcomes: list[ParentOutcome], timeline: list[list[str]] | None = None,
-          hours=_FROM_REQUEST) -> PlanResult:
-    if hours is _FROM_REQUEST:
-        hours = req.hours if timeline is None else None  # presets start from default hours
+def _plan_inputs(req: AnalyseRequest, outcomes: list[ParentOutcome]) -> tuple[list[ParentContext], dict]:
+    """Parent contexts and the keyword arguments shared by evaluate() and candidate_fixes()."""
     mat = _maternity(req)
     birthing = mat[0] if mat and mat[1].status != "none" else None
     credit = None
@@ -312,9 +380,44 @@ def _plan(req: AnalyseRequest, outcomes: list[ParentOutcome], timeline: list[lis
 
     # § 4 Abs. 6 Satz 4 BEEG: simultaneous Basis allowed for multiples, premature births, disability
     exception = req.children_expected > 1 or req.premature_or_disability
-    return evaluate(timeline if timeline is not None else _timeline(req), contexts, birth=req.birth_date,
-                    birthing=birthing, maternity=credit, single_parent_4c=req.single_parent_4c,
-                    simultaneous_exception=exception, gb_active=gb_active, hours=hours)
+    return contexts, {"birth": req.birth_date, "birthing": birthing, "maternity": credit,
+                      "single_parent_4c": req.single_parent_4c, "simultaneous_exception": exception,
+                      "gb_active": gb_active}
+
+
+def _plan(req: AnalyseRequest, outcomes: list[ParentOutcome], timeline: list[list[str]] | None = None,
+          hours=_FROM_REQUEST) -> PlanResult:
+    if hours is _FROM_REQUEST:
+        hours = req.hours if timeline is None else None  # presets start from default hours
+    contexts, kw = _plan_inputs(req, outcomes)
+    return evaluate(timeline if timeline is not None else _timeline(req), contexts, hours=hours, **kw)
+
+
+MAX_FIXES = 3
+
+
+def _plan_fixes(req: AnalyseRequest, outcomes: list[ParentOutcome], plan: PlanResult) -> list[dict]:
+    """For an invalid plan: the best valid plans that change one month (or the same month for both
+    parents), ranked by the household's Elterngeld. Empty if no such change exists."""
+    if plan.valid:
+        return []
+    contexts, kw = _plan_inputs(req, outcomes)
+    kw.pop("gb_active")
+    candidates = candidate_fixes(plan.timeline, contexts, hours=req.hours, **kw)
+    scored = []
+    for c in candidates:
+        r = _plan(req, outcomes, c["timeline"], hours=c["hours"])
+        scored.append({**c, "totals": r.totals, "household_total": r.household_total})
+    # equal amounts: prefer fewer changes, then the plainer month type
+    plain = {"plus": 0, "basis": 1, "none": 2, "ez": 3, "plus_tz": 4, "bonus": 5}
+    scored.sort(key=lambda c: (-c["household_total"], len(c["changes"]), max(plain[x["to"]] for x in c["changes"])))
+    fixes, seen = [], set()
+    for c in scored:  # one suggestion per changed month
+        where = tuple((x["parent"], x["lm"]) for x in c["changes"])
+        if where not in seen:
+            seen.add(where)
+            fixes.append(c)
+    return fixes[:MAX_FIXES]
 
 
 def _plan_json(plan: PlanResult) -> dict:
@@ -347,15 +450,19 @@ def analyse(req: AnalyseRequest) -> dict:
     from_bescheid = z.mode == "bescheid" and bool(z.bescheid_values)
     zve_detail = None
     quick = False
+    payslip = z.mode == "payslip" and len(z.payslips) == len(req.parents)
     persons_in = z.persons
     if from_bescheid:
         zve_total = sum(z.bescheid_values, ZERO)
         if not z.bescheid_kfb_abgezogen:
             zve_total = max(zve_total - freibetraege_fuer_kinder(z.kinderfreibetrag_zaehler, ty), ZERO)
     else:
-        if not persons_in:
+        if payslip:
+            persons_in = [annualise_payslip(ps, p, ty) for ps, p in zip(z.payslips, req.parents)]
+        elif not persons_in:
             quick = True
-            persons_in = [_quick_zve_person(p, ty) for p in req.parents]
+            children = _children_in_cap_year(req, ty)
+            persons_in = [_quick_zve_person(p, ty, children) for p in req.parents]
         persons = [ZvEPerson(**pi.model_dump(exclude={"bav_existing", "pending_one_off"})) for pi in persons_in]
         res = schaetze_zve(ZvEHaushalt(
             tax_year=ty.year, personen=persons,
@@ -368,6 +475,15 @@ def analyse(req: AnalyseRequest) -> dict:
             res.hinweise.insert(0, "Quick estimate from 12 × monthly gross pay plus the bonuses entered (no other "
                                    "income or individual deductions). Enter Lohnsteuerbescheinigung figures for a "
                                    "better estimate.")
+            res.hinweise.insert(1, (
+                f"Care insurance: no child yet in {ty.year}, so the 0,6 % childless surcharge is included "
+                f"(employee rate {str((pv_an_rate(0) * 100).normalize()).replace('.', ',')} %, § 55 Abs. 3 SGB XI)."
+                if children == 0 else
+                f"Care insurance: {children} child{'ren' if children > 1 else ''} in {ty.year} – no childless "
+                f"surcharge{', reduced rate for 2+ children' if children > 1 else ''} (§ 55 Abs. 3, 3a SGB XI)."))
+        if payslip:
+            res.hinweise[:0] = _payslip_notes(req, z.payslips, ty)
+        if quick or payslip:
             for p in req.parents:
                 if _kv_art(p) == "privat" and not p.private_premium:
                     res.hinweise.insert(1, f"{p.label}: enter the private premium – without it no health-insurance "
@@ -402,7 +518,7 @@ def analyse(req: AnalyseRequest) -> dict:
                     rv_total=p_in.rv_arbeitnehmer + p_in.rv_arbeitgeber + p_in.basisrente_beitraege,
                     altersvorsorge_cap=cap,
                     bav_existing=p_in.bav_existing or parent.bav_monthly * 12,
-                    pending_one_off=p_in.pending_one_off or parent.bonuses_pending,
+                    pending_one_off=p_in.pending_one_off or parent.one_off_pending,
                 ))
         path, quantified = A.eligibility_path(gap=max(gap, ZERO), tax_year=ty.year, today=today,
                                               levers=levers, from_tax_assessment=from_bescheid)
@@ -450,7 +566,7 @@ def analyse(req: AnalyseRequest) -> dict:
                 "bemessungszeitraum": [_month_str(m) for m in o.bmz],
                 "excluded_months": [_month_str(m) for m in o.excluded],
                 "netto": o.netto,
-                "bonuses_excluded": p.bonuses_annual,
+                "bonuses_excluded": p.one_off_annual,
                 "part_time": _part_time_json(req, p),
                 "works": p.erwerbsart != Erwerbsart.KEINE and p.average_gross > 0,
                 "gross_before_bav": cent(p.average_gross),
@@ -463,14 +579,15 @@ def analyse(req: AnalyseRequest) -> dict:
         ],
         "geschwisterbonus": gb,
         "income_cap": {
-            "source": "steuerbescheid" if from_bescheid else ("quick_estimate" if quick else "estimate"),
+            "source": ("steuerbescheid" if from_bescheid else "payslip" if payslip
+                       else "quick_estimate" if quick else "estimate"),
             "zve_total": zve_total,
             "detail": zve_detail,
             "check": cap_check,
             "gap_analysis": closable,
         },
         "eligibility": eligibility,
-        "plan": {**_plan_json(plan), "presets": preset_results},
+        "plan": {**_plan_json(plan), "presets": preset_results, "fixes": _plan_fixes(req, outcomes, plan)},
         "mutterschutz": _maternity_json(req),
         "social": {**_social_json(req, plan), "tax_class": _tax_class_json(req, outcomes, plan, today)},
         "recommendations": [r.as_dict() for r in recs],
@@ -631,11 +748,11 @@ def _amount_recommendations(req: AnalyseRequest, outcomes: list[ParentOutcome], 
 
     # One-off payments: no effect on Elterngeld, but on the income cap
     for p in req.parents:
-        if p.bonuses_annual > 0:
+        if p.one_off_annual > 0:
             recs.append(A.Recommendation(
                 id=f"bonuses_{p.label}", category="info",
                 title=f"{p.label}: bonuses don't raise Elterngeld – but count for the income cap",
-                detail=(f"One-off payments ({eur(p.bonuses_annual)} entered) are sonstige Bezüge and are left out of "
+                detail=(f"One-off payments ({eur(p.one_off_annual)} entered) are sonstige Bezüge and are left out of "
                         "the Elterngeld-Netto. They are still part of the zvE of the year before birth. Bonuses or "
                         "allowances paid regularly every month are laufender Arbeitslohn and belong in the monthly "
                         "gross pay instead."),

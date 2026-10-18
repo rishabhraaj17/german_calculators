@@ -67,6 +67,9 @@ class ParentIn(BaseModel):
     # Excluded from Elterngeld (§ 2c Abs. 1 Satz 2 BEEG) but part of the zvE for the income cap.
     bonuses_annual: Money = Field(Decimal(0), ge=0, le=10_000_000)  # in the calendar year before birth
     bonuses_pending: Money = Field(Decimal(0), ge=0, le=10_000_000)  # part of it not yet paid out
+    # "one_off": sonstige Bezüge (annual bonus, 13th salary). "monthly": paid in equal parts with every
+    # salary – then it is laufender Arbeitslohn and counts for Elterngeld like the monthly gross.
+    bonus_payment: Literal["one_off", "monthly"] = "one_off"
     # Employee salary conversion into a company pension (Direktversicherung, Pensionskasse,
     # Pensionsfonds) per month. `monthly_gross` is the gross BEFORE this conversion.
     bav_monthly: Money = Field(Decimal(0), ge=0, le=100_000)
@@ -99,10 +102,21 @@ class ParentIn(BaseModel):
 
     @property
     def average_gross(self) -> Decimal:
-        """§ 2c Abs. 1 BEEG: monthly average over the 12 months (months without pay count as 0)."""
+        """§ 2c Abs. 1 BEEG: monthly average over the 12 months (months without pay count as 0).
+        A bonus paid with every salary is part of it; per-month lists are taken to include it."""
         if self.monthly_gross_list is not None:
             return sum(self.monthly_gross_list, Decimal(0)) / 12
-        return self.monthly_gross or Decimal(0)
+        regular = self.bonuses_annual / 12 if self.bonus_payment == "monthly" else Decimal(0)
+        return (self.monthly_gross or Decimal(0)) + regular
+
+    @property
+    def one_off_annual(self) -> Decimal:
+        """Sonstige Bezüge: left out of Elterngeld (§ 2c Abs. 1 Satz 2 BEEG), part of the zvE."""
+        return self.bonuses_annual if self.bonus_payment == "one_off" else Decimal(0)
+
+    @property
+    def one_off_pending(self) -> Decimal:
+        return self.bonuses_pending if self.bonus_payment == "one_off" else Decimal(0)
 
 
 class ZvEPersonIn(BaseModel):
@@ -130,13 +144,40 @@ class ZvEPersonIn(BaseModel):
     pending_one_off: Money = Field(Decimal(0), ge=0)
 
 
+class PayslipPersonIn(BaseModel):
+    """One payslip of the cap year: "this month" and "year to date" columns. The rest of the year is
+    extrapolated with this month's values, so this month should be a regular one (no one-off payment)."""
+
+    month: int = Field(ge=1, le=12)  # month of the payslip in the year before birth
+    brutto_month: NonNegMoney = Decimal(0)  # Steuer-Brutto
+    brutto_ytd: NonNegMoney = Decimal(0)
+    rv_month: NonNegMoney = Decimal(0)  # employee shares
+    rv_ytd: NonNegMoney = Decimal(0)
+    alv_month: NonNegMoney = Decimal(0)
+    alv_ytd: NonNegMoney = Decimal(0)
+    kv_month: NonNegMoney = Decimal(0)  # own share: voluntary members net of the employer subsidy
+    kv_ytd: NonNegMoney = Decimal(0)
+    pv_month: NonNegMoney = Decimal(0)
+    pv_ytd: NonNegMoney = Decimal(0)
+    one_off_due: NonNegMoney = Decimal(0)  # one-off payments still to come until 31 Dec
+    werbungskosten: Money | None = Field(None, ge=0)  # actual Werbungskosten for the year, if above the Pauschbetrag
+
+    @model_validator(mode="after")
+    def _ytd_covers_month(self) -> "PayslipPersonIn":
+        for k in ("brutto", "rv", "alv", "kv", "pv"):
+            if getattr(self, f"{k}_ytd") < getattr(self, f"{k}_month"):
+                raise ValueError(f"{k}: the year-to-date value cannot be lower than this month's")
+        return self
+
+
 class ZvEIn(BaseModel):
-    mode: Literal["bescheid", "estimate"] = "estimate"
+    mode: Literal["bescheid", "estimate", "payslip"] = "estimate"
     bescheid_values: list[NonNegMoney] = Field(default_factory=list, max_length=2)  # zvE per person (or one joint value)
     # The Bescheid deducts the Freibeträge für Kinder only if they beat Kindergeld (§ 31 EStG);
     # for the income cap they are always deducted, so subtract them here if the Bescheid did not.
     bescheid_kfb_abgezogen: bool = True
     persons: list[ZvEPersonIn] = Field(default_factory=list, max_length=2)
+    payslips: list[PayslipPersonIn] = Field(default_factory=list, max_length=2)  # mode "payslip", per parent
     zusammenveranlagung: bool = False
     kinderfreibetrag_zaehler: Decimal = Field(Decimal(0), ge=0, le=20)
     alleinerziehend: bool = False

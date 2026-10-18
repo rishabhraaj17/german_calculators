@@ -1,3 +1,5 @@
+from decimal import Decimal as D
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -362,3 +364,85 @@ def test_geschwisterbonus_names_last_month_with_bonus():
 def test_input_limits_are_validated(patch):
     r = client.post("/api/analyse", json={**COUPLE, **patch})
     assert r.status_code == 422
+
+
+def test_invalid_plan_gets_best_single_month_fix():
+    # B takes Basis in LM 1–2 while A's Mutterschaftsgeld months count as Basis: two simultaneous
+    # Basis months (§ 4 Abs. 6 BEEG). Best fix: B's LM 2 as Plus instead of Basis.
+    tl = [["basis"] * 12 + ["none"] * 24, ["basis"] * 2 + ["none"] * 34]
+    r = client.post("/api/analyse", json={**COUPLE, "timeline": tl}).json()["plan"]
+    assert not r["valid"]
+    best = r["fixes"][0]
+    assert len(best["changes"]) == 1 and best["changes"][0]["parent"] == 1
+    assert best["changes"][0]["from"] == "basis" and best["changes"][0]["to"] in ("plus", "plus_tz", "none", "ez")
+    valid = client.post("/api/analyse", json={**COUPLE, "timeline": best["timeline"], "hours": best["hours"]}).json()
+    assert valid["plan"]["valid"] and valid["plan"]["household_total"] == best["household_total"]
+    assert valid["plan"]["fixes"] == []
+
+
+def test_bonus_paid_monthly_is_regular_pay():
+    # paid with every salary = laufender Arbeitslohn: counts for Elterngeld (unlike sonstige Bezüge)
+    def run(kind):
+        ben = {**COUPLE["parents"][1], "monthly_gross": 3000, "bonuses_annual": 6000, "bonus_payment": kind}
+        return client.post("/api/analyse", json={**COUPLE, "parents": [COUPLE["parents"][0], ben]}).json()
+    one_off, monthly = run("one_off"), run("monthly")
+    assert one_off["parents"][1]["netto"]["brutto"] == "3000.00"
+    assert monthly["parents"][1]["netto"]["brutto"] == "3500.00"
+    assert monthly["parents"][1]["bonuses_excluded"] == "0"
+    assert one_off["income_cap"]["zve_total"] == monthly["income_cap"]["zve_total"]  # same annual pay
+    assert not any(r["id"].startswith("bonuses_") for r in monthly["recommendations"])
+
+
+def test_quick_zve_includes_childless_care_surcharge():
+    # § 55 Abs. 3 SGB XI: +0.6 % for childless members in the cap year (the child is born the year after);
+    # each parent at 7 500 €/month pays it on the KV/PV ceiling 69 750 € (2026): 418,50 € more deduction each
+    childless = client.post("/api/analyse", json={**COUPLE, "parents": [{**p, "monthly_gross": 7500} for p in COUPLE["parents"]]}).json()
+    with_child = client.post("/api/analyse", json={**COUPLE, "siblings": [{"birth_date": "2024-05-01"}],
+                                                   "parents": [{**p, "monthly_gross": 7500} for p in COUPLE["parents"]]}).json()
+    d0, d1 = childless["income_cap"]["detail"], with_child["income_cap"]["detail"]
+    assert int(d0["kranken_pflege_sonstige_vorsorge"]) - int(d1["kranken_pflege_sonstige_vorsorge"]) == 837
+    assert any("childless" in h for h in d0["hinweise"])
+
+
+def _payslip(**kw):
+    base = {"month": 9, "brutto_month": 6000, "brutto_ytd": 64000, "rv_month": 558, "rv_ytd": 5952,
+            "alv_month": 78, "alv_ytd": 832, "kv_month": 508.5, "kv_ytd": 4576.5, "pv_month": 104.63, "pv_ytd": 941.67}
+    return {**base, **kw}
+
+
+def test_payslip_ytd_is_extrapolated_without_scaling_one_offs():
+    # Jan–Sep actual (incl. a 10 000 € bonus), Oct–Dec at September's values: 64 000 + 3 × 6 000 = 82 000
+    from app.models import ParentIn, PayslipPersonIn
+    from app.service import annualise_payslip
+    from app import params as P
+    p = annualise_payslip(PayslipPersonIn(**_payslip()), ParentIn(monthly_gross=6000), P.TAX_YEARS[2026])
+    assert p.jahresbrutto == 82000
+    assert p.rv_arbeitnehmer == p.rv_arbeitgeber == 5952 + 3 * 558
+    assert p.kv_arbeitnehmer == D("4576.5") + 3 * D("508.5")
+    assert p.pv_arbeitnehmer == D("941.67") + 3 * D("104.63") and p.alv_arbeitnehmer == 832 + 3 * 78
+
+
+def test_payslip_one_off_still_due_gets_contributions_only_up_to_the_ceiling():
+    from app.models import ParentIn, PayslipPersonIn
+    from app.service import annualise_payslip
+    from app import params as P
+    ty = P.TAX_YEARS[2026]  # RV ceiling 101 400, KV ceiling 69 750
+    p = annualise_payslip(PayslipPersonIn(**_payslip(one_off_due=50000)), ParentIn(monthly_gross=6000), ty)
+    assert p.jahresbrutto == 132000 and p.pending_one_off == 50000
+    # RV room: 101 400 − (64 000 + 3 × 6 000) = 19 400 at September's rate 558 / 6 000 = 9.3 %
+    assert p.rv_arbeitnehmer == 5952 + 3 * 558 + D("1804.20")
+    # KV room: 69 750 − 82 000 < 0 -> nothing more
+    assert p.kv_arbeitnehmer == D("4576.5") + 3 * D("508.5")
+
+
+def test_payslip_mode_in_analysis():
+    zve = {"mode": "payslip", "zusammenveranlagung": True, "payslips": [_payslip(), _payslip(brutto_ytd=54000)]}
+    r = client.post("/api/analyse", json={**COUPLE, "zve": zve}).json()["income_cap"]
+    assert r["source"] == "payslip"
+    assert any("09/2026" in h for h in r["detail"]["hinweise"])
+    assert r["detail"]["einkuenfte_nichtselbstaendig"] == str(82000 + 72000 - 2 * 1230)
+
+
+def test_payslip_year_to_date_cannot_be_below_the_month():
+    zve = {"mode": "payslip", "payslips": [_payslip(rv_ytd=100), _payslip()]}
+    assert client.post("/api/analyse", json={**COUPLE, "zve": zve}).status_code == 422

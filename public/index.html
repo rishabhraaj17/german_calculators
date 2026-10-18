@@ -77,6 +77,7 @@
     <p class="hint">No Elterngeld if the zu versteuerndes Einkommen (zvE) of the calendar year before birth exceeds 175.000 € – for couples living together, both incomes combined.</p>
     <div class="options">
       <label class="option"><input type="radio" name="zve_mode" value="quick" checked><span>Quick estimate from the pay entered above</span></label>
+      <label class="option"><input type="radio" name="zve_mode" value="payslip"><span>From my latest payslip (year to date)</span></label>
       <label class="option"><input type="radio" name="zve_mode" value="estimate"><span>Estimate from my Lohnsteuerbescheinigung</span></label>
       <label class="option"><input type="radio" name="zve_mode" value="bescheid"><span>I have the Steuerbescheid</span></label>
     </div>
@@ -85,14 +86,15 @@
       <label class="field"><span class="t">zvE in the Steuerbescheid <span class="cap-year"></span></span><small>joint value, or Parent A</small><input type="number" name="bescheid_0" min="0" step="1" inputmode="numeric"></label>
       <label class="field only-two"><span class="t">zvE of Parent B</span><small>only if assessed separately</small><input type="number" name="bescheid_1" min="0" step="1" inputmode="numeric"></label>
     </div>
+    <div class="mode mode-payslip" id="zve-payslips"></div>
     <div class="mode mode-estimate" id="zve-persons"></div>
-    <div class="grid mode mode-estimate mode-quick mode-bescheid">
+    <div class="grid mode mode-estimate mode-quick mode-bescheid mode-payslip">
       <label class="field"><span class="t">Kinderfreibetrag count</span><small>Zähler for older children; 1.0 per child if married</small><input type="number" name="kinderfreibetrag_zaehler" value="0" min="0" step="0.5"></label>
     </div>
     <div class="grid mode mode-bescheid">
       <label class="check"><input type="checkbox" name="bescheid_kfb_abgezogen" checked><span>The zvE in the Bescheid already deducts the Freibeträge für Kinder <small>untick if Kindergeld was more favourable – the cap always uses the zvE after these Freibeträge (§ 2 Abs. 5 Satz 2 EStG)</small></span></label>
     </div>
-    <div class="grid mode mode-estimate mode-quick">
+    <div class="grid mode mode-estimate mode-quick mode-payslip">
       <label class="field only-married"><span class="t">Tax assessment</span><small>as in your tax return</small><select name="zusammenveranlagung"><option value="joint">Joint (Zusammenveranlagung)</option><option value="separate">Separate</option></select></label>
       <label class="field only-single"><span class="t">Older children in household</span><small>in that year; gives the § 24b relief</small><input type="number" name="kinder_im_haushalt" value="0" min="0"></label>
     </div>
@@ -132,8 +134,11 @@
         <option value="minijob">Minijob only</option>
         <option value="keine">No income</option></select></label>
       <label class="field"><span class="t">Monthly gross pay</span><small>regular pay, before bAV, no bonuses</small><input type="number" name="monthly_gross" min="0" step="0.01" inputmode="decimal"></label>
-      <label class="field"><span class="t">Bonuses per year</span><small>13th salary, holiday/Christmas pay</small><input type="number" name="bonuses_annual" min="0" step="0.01" inputmode="decimal" value="0"></label>
-      <label class="field"><span class="t">… of that not yet paid</span><small>helps to stay under the cap</small><input type="number" name="bonuses_pending" min="0" step="0.01" inputmode="decimal" value="0"></label>
+      <label class="field"><span class="t">Bonuses per year</span><small>in the calendar year before birth</small><input type="number" name="bonuses_annual" min="0" step="0.01" inputmode="decimal" value="0"></label>
+      <label class="field"><span class="t">How is the bonus paid?</span><small>one-off (yearly bonus, 13th salary) doesn't count for Elterngeld; a share paid with every salary does</small><select name="bonus_payment">
+        <option value="one_off" selected>One-off</option>
+        <option value="monthly">With every salary</option></select></label>
+      <label class="field one-off-only"><span class="t">… of that not yet paid</span><small>helps to stay under the cap</small><input type="number" name="bonuses_pending" min="0" step="0.01" inputmode="decimal" value="0"></label>
       <label class="field"><span class="t">Company pension (bAV) per month</span><small>your own salary conversion</small><input type="number" name="bav_monthly" min="0" step="0.01" inputmode="decimal" value="0"></label>
       <label class="field"><span class="t">Kinderfreibeträge</span><small>as on the payslip</small><input type="number" name="kinderfreibetraege" value="0" min="0" step="0.5"></label>
       <label class="field"><span class="t">Health insurance</span><small>decides who pays Mutterschaftsgeld</small><select name="kv_art">
@@ -179,6 +184,28 @@
       </div>
     </details>
   </fieldset>
+</template>
+
+<template id="tpl-payslip-person">
+  <div class="zve-person payslip-person">
+    <h3></h3>
+    <p class="hint">Read both columns from one payslip of a regular month. The months after it are assumed to pay the same; one-off payments still to come go in the last field.</p>
+    <div class="grid">
+      <label class="field wide"><span class="t">Payslip month</span><small>in <span class="cap-year-plain">the year before birth</span></small><select name="month"><option value="1">January</option><option value="2">February</option><option value="3">March</option><option value="4">April</option><option value="5">May</option><option value="6">June</option><option value="7">July</option><option value="8">August</option><option value="9">September</option><option value="10">October</option><option value="11">November</option><option value="12">December</option></select></label>
+      <label class="field"><span class="t">Taxable gross (Steuer-Brutto) – this month</span><small>regular month, no one-off payment</small><input type="number" name="brutto_month" min="0" step="0.01" inputmode="decimal"></label>
+      <label class="field"><span class="t">Taxable gross (Steuer-Brutto) – year to date</span><small>“Jahreswerte” / “kumuliert”</small><input type="number" name="brutto_ytd" min="0" step="0.01" inputmode="decimal"></label>
+      <label class="field"><span class="t">Pension (RV), employee – this month</span><small>Rentenversicherung AN</small><input type="number" name="rv_month" min="0" step="0.01" inputmode="decimal"></label>
+      <label class="field"><span class="t">Pension (RV), employee – year to date</span><small>“Jahreswerte” / “kumuliert”</small><input type="number" name="rv_ytd" min="0" step="0.01" inputmode="decimal"></label>
+      <label class="field"><span class="t">Unemployment (AV), employee – this month</span><small>Arbeitslosenversicherung AN</small><input type="number" name="alv_month" min="0" step="0.01" inputmode="decimal"></label>
+      <label class="field"><span class="t">Unemployment (AV), employee – year to date</span><small>“Jahreswerte” / “kumuliert”</small><input type="number" name="alv_ytd" min="0" step="0.01" inputmode="decimal"></label>
+      <label class="field"><span class="t">Health (KV), your own share – this month</span><small>voluntary members: contribution minus employer subsidy</small><input type="number" name="kv_month" min="0" step="0.01" inputmode="decimal"></label>
+      <label class="field"><span class="t">Health (KV), your own share – year to date</span><small>“Jahreswerte” / “kumuliert”</small><input type="number" name="kv_ytd" min="0" step="0.01" inputmode="decimal"></label>
+      <label class="field"><span class="t">Care (PV), employee – this month</span><small>Pflegeversicherung AN</small><input type="number" name="pv_month" min="0" step="0.01" inputmode="decimal"></label>
+      <label class="field"><span class="t">Care (PV), employee – year to date</span><small>“Jahreswerte” / “kumuliert”</small><input type="number" name="pv_ytd" min="0" step="0.01" inputmode="decimal"></label>
+      <label class="field"><span class="t">One-off payments still due</span><small>until 31 Dec, e.g. Christmas bonus</small><input type="number" name="one_off_due" min="0" step="0.01" inputmode="decimal"></label>
+      <label class="field"><span class="t">Work expenses for the year</span><small>only if above 1.230 €</small><input type="number" name="werbungskosten" min="0" step="0.01" inputmode="decimal"></label>
+    </div>
+  </div>
 </template>
 
 <template id="tpl-zve-person">

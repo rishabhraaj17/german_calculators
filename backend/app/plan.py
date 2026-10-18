@@ -296,6 +296,67 @@ class MaternityCredit:
     paid_per_day: Decimal | None = None
 
 
+def _forced_basis_months(birth: date, birthing: int | None, maternity: MaternityCredit | None) -> list[int]:
+    """§ 4 Abs. 4 Satz 3 BEEG: months with creditable Mutterschaftsleistungen count as Basis months."""
+    if (maternity is None or birthing is None
+            or (maternity.credited_per_day is not None and maternity.credited_per_day <= 0)):
+        return []
+    return [lm for lm in range(1, MAX_LM + 1) if lebensmonat(birth, lm)[0] <= maternity.end]
+
+
+def candidate_fixes(
+    timeline: list[list[str]],
+    parents: list[ParentContext],
+    *,
+    birth: date,
+    birthing: int | None,
+    single_parent_4c: bool,
+    simultaneous_exception: bool,
+    maternity: MaternityCredit | None = None,
+    hours: list[list[Decimal | None]] | None = None,
+) -> list[dict]:
+    """Valid plans that differ from an invalid one by one month – of one parent, or of both parents in the
+    same month (bonus blocks). Only the rules are checked here; the caller ranks them by amount.
+    Each result: {"timeline", "hours", "changes": [{"parent", "lm", "from", "to"}]}. A changed month
+    gets its default hours back."""
+    n = len(parents)
+    forced = _forced_basis_months(birth, birthing, maternity)
+    base = normalise(timeline, n)
+    for lm in forced:
+        base[birthing][lm - 1] = "basis"  # type: ignore[index]
+    given = [list((hours[i] if hours and i < len(hours) else []) + [None] * MAX_LM)[:MAX_LM] for i in range(n)]
+    salary_model = any(p.pay is not None for p in parents)
+
+    def valid(tl: list[list[str]], hrs: list[list[Decimal | None]]) -> bool:
+        eff = _effective_hours(tl, parents, hrs, birthing, forced) if salary_model else None
+        return not _validate(tl, parents, single_parent_4c, simultaneous_exception, eff)
+
+    def changeable(i: int, lm: int) -> bool:
+        return not (i == birthing and lm in forced)
+
+    def allowed(kind: str, lm: int) -> bool:
+        return not ((kind in EG_TYPES and lm > EG_LAST_LM) or (kind == "basis" and lm > BASIS_LAST_LM))
+
+    edits: list[list[tuple[int, int, str]]] = [
+        [(i, lm, kind)] for i in range(n) for lm in range(1, MAX_LM + 1) for kind in TYPES
+        if changeable(i, lm) and allowed(kind, lm) and kind != base[i][lm - 1]]
+    if n == 2:
+        edits += [[(0, lm, kind), (1, lm, kind)] for lm in range(1, MAX_LM + 1) for kind in TYPES
+                  if changeable(0, lm) and changeable(1, lm) and allowed(kind, lm)
+                  and kind != base[0][lm - 1] and kind != base[1][lm - 1]]
+    out = []
+    for edit in edits:
+        tl = [row[:] for row in base]
+        hrs = [row[:] for row in given]
+        for i, lm, kind in edit:
+            tl[i][lm - 1] = kind
+            hrs[i][lm - 1] = None
+        if valid(tl, hrs):
+            out.append({"timeline": tl, "hours": hrs,
+                        "changes": [{"parent": i, "lm": lm, "from": base[i][lm - 1], "to": kind} for i, lm, kind in edit]})
+    return out
+
+
 def evaluate(
     timeline: list[list[str]],
     parents: list[ParentContext],
@@ -316,11 +377,8 @@ def evaluate(
     if birthing is None:
         maternity = None
     ms_end = maternity.end if maternity else None
-    forced: list[int] = []
-    # § 4 Abs. 4 Satz 3 BEEG: months with creditable Mutterschaftsleistungen count as Basis months
-    if (maternity is not None and birthing is not None
-            and (maternity.credited_per_day is None or maternity.credited_per_day > 0)):
-        forced = [lm for lm in range(1, MAX_LM + 1) if lebensmonat(birth, lm)[0] <= maternity.end]
+    forced = _forced_basis_months(birth, birthing, maternity)
+    if birthing is not None and forced:
         changed = [lm for lm in forced if tl[birthing][lm - 1] != "basis"]
         for lm in forced:
             tl[birthing][lm - 1] = "basis"
