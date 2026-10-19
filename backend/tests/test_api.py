@@ -531,3 +531,33 @@ def test_index_references_assets_with_current_version():
     html = (public / "index.html").read_text()
     assert f"/static/styles.css?v={stamp}" in html and f"/static/app.js?v={stamp}" in html, \
         f"update the asset version in index.html to ?v={stamp}"
+
+
+def _mg_rec(body):
+    r = client.post("/api/analyse", json=body)
+    assert r.status_code == 200, r.text
+    return next((x for x in r.json()["recommendations"] if x["id"] == "steuerklasse_mutterschaftsgeld"), None)
+
+
+def test_tax_class_switch_for_more_mutterschaftsgeld():
+    # Anna gives birth 20.06.2027: Schutzfrist from 09.05.2027, so Mutterschaftsgeld uses the net pay of
+    # Feb–Apr 2027. Latest switch that covers all 3 months: class III from February, filed by 31.01.2027.
+    rec = _mg_rec(COUPLE)
+    assert rec and rec["deadline"] == "2027-01-31" and float(rec["impact_eur"]) > 0
+    assert "02/2027" in rec["detail"] and "Mutterschaftsgeld" in rec["title"]
+
+
+def test_mutterschaftsgeld_switch_partial_when_late_and_absent_when_not_applicable():
+    late = _mg_rec({**COUPLE, "today": "2027-02-10"})  # only March and April can still change
+    full = _mg_rec(COUPLE)
+    assert late["deadline"] == "2027-02-28" and float(late["impact_eur"]) < float(full["impact_eur"])
+    assert _mg_rec({**COUPLE, "today": "2027-04-05"}) is None  # all reference months settled or decided
+    already_iii = [{**COUPLE["parents"][0], "steuerklasse": "III"}, {**COUPLE["parents"][1], "steuerklasse": "V"}]
+    assert _mg_rec({**COUPLE, "parents": already_iii}) is None
+    assert _mg_rec({**COUPLE, "household": "partnership"}) is None  # tax classes III/V only for spouses
+
+
+def test_mutterschaftsgeld_switch_independent_of_income_cap():
+    over = {**COUPLE, "zve": {"mode": "bescheid", "bescheid_values": [180000]}}
+    rec = _mg_rec(over)
+    assert rec and not any("income cap" in c for c in rec["caveats"])

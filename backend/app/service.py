@@ -10,7 +10,8 @@ from typing import Any
 
 from . import advisor as A
 from . import params as P
-from .bemessung import Month, bemessungszeitraum, mutterschutz_months_before_birth, steuerklassenwechsel_frist
+from .bemessung import (Month, bemessungszeitraum, massgebliches_merkmal, mutterschutz_months_before_birth,
+                        steuerklassenwechsel_frist)
 from .eligibility import Check, Eligibility, Grundvoraussetzungen, Status, check_basics, check_income_cap
 from .elterngeld import (
     ZERO,
@@ -581,7 +582,8 @@ def analyse(req: AnalyseRequest) -> dict:
     amount_recs = _amount_recommendations(req, outcomes, plan, today, preset_results)
     if cap_check.status != Status.MET:
         for r in amount_recs:
-            r.caveats.insert(0, "Only relevant once the income cap is met.")
+            if r.id != "steuerklasse_mutterschaftsgeld":  # Mutterschaftsgeld doesn't depend on the cap
+                r.caveats.insert(0, "Only relevant once the income cap is met.")
     recs.extend(amount_recs)
     recs.extend(_process_recommendations(req, outcomes, gb))
 
@@ -712,6 +714,87 @@ def _maternity_json(req: AnalyseRequest) -> dict | None:
     }
 
 
+def _month_of(d: date) -> Month:
+    return d.year, d.month
+
+
+def _mutterschaftsgeld_switch(req: AnalyseRequest, outcomes: list[ParentOutcome], plan: PlanResult, today: date,
+                              gb: bool) -> A.Recommendation | None:
+    """Steuerklasse III for the birthing parent during the 3 months Mutterschaftsgeld is based on.
+
+    The daily amount is the net pay of the last 3 settled months before the Schutzfrist / 90
+    (§ 21 Abs. 1 MuSchG); the employer pays everything above 13 € a day (§ 20). The switch is proposed
+    as late as possible – from the first of those months – so the class that counts for Elterngeld
+    (§ 2c Abs. 3 BEEG, the class held in most months) normally stays as it is. The amount is the
+    extra Mutterschaftsgeld minus any extra credit against Elterngeld (§ 3 BEEG)."""
+    mat = _maternity(req)
+    if req.household != "married" or len(req.parents) != 2 or not mat:
+        return None
+    i, m = mat
+    j = 1 - i
+    p = req.parents[i]
+    if m.status not in ("gkv", "privat") or p.steuerklasse == Steuerklasse.III:
+        return None
+    first_ref = add_months(date(m.fristen.start.year, m.fristen.start.month, 1), -3)
+    ref = [_month_of(add_months(first_ref, k)) for k in range(3)]
+    effective = max(_month_of(add_months(date(today.year, today.month, 1), 1)), ref[0])  # § 39 Abs. 6 Satz 5 EStG
+    covered = sum(1 for x in ref if x >= effective)
+    if covered == 0:
+        return None
+    gross = elterngeld_brutto(p, P.tax_year_for_birth(req.birth_date))
+
+    def take_home(k: Steuerklasse) -> Decimal:
+        return estimate_net_monthly(gross, erwerbsart=p.erwerbsart, steuerklasse=k, faktor=p.faktor,
+                                    kirchensteuer=p.kirchensteuer, kinderfreibetraege=p.kinderfreibetraege,
+                                    kv_art=_kv_art(p), children_under_25=len(req.siblings), year=ref[0][0])
+
+    more = take_home(Steuerklasse.III) - take_home(p.steuerklasse)
+    if more <= 0:
+        return None
+    m2 = mutterschaftsgeld(due=req.due_date or req.birth_date, birth=req.birth_date, weeks_after=m.fristen.weeks_after,
+                           erwerbsart=p.erwerbsart, kv_art=_kv_art(p),
+                           net_monthly=m.net_monthly + more * covered / 3, net_source=m.net_source)
+
+    # Elterngeld with the classes that count after the switch (both parents) and the higher credit
+    def decisive(o: ParentOutcome, old: Steuerklasse, new: str) -> Steuerklasse:
+        return Steuerklasse(massgebliches_merkmal([new if x >= effective else old.value for x in o.bmz]))
+
+    classes = {i: decisive(outcomes[i], p.steuerklasse, "III"), j: decisive(outcomes[j], req.parents[j].steuerklasse, "V")}
+    alt = [o if classes[k] == req.parents[k].steuerklasse else _parent_outcome(req, req.parents[k], gb, classes[k])
+           for k, o in enumerate(outcomes)]
+    contexts, kw = _plan_inputs(req, alt)
+    kw["maternity"] = MaternityCredit(end=m2.fristen.end, credited_per_day=m2.credited_per_day, paid_per_day=m2.paid_per_day)
+    alt_plan = evaluate(plan.timeline, contexts, hours=req.hours, **kw)
+    gain = cent(m2.total - m.total + alt_plan.household_total - plan.household_total)
+    if gain <= 1:
+        return None
+
+    months = ", ".join(f"{mm:02d}/{y}" for y, mm in ref)
+    eff = f"{effective[1]:02d}/{effective[0]}"
+    deadline = date(effective[0], effective[1], 1) - timedelta(days=1)
+    other = req.parents[j].label
+    eg_note = ("" if all(classes[k] == req.parents[k].steuerklasse for k in (0, 1)) else
+               " The switch also changes the class that counts for Elterngeld; the amount includes that effect.")
+    return A.Recommendation(
+        id="steuerklasse_mutterschaftsgeld", category="amount",
+        title=f"{p.label}: Steuerklasse III before Mutterschutz – more Mutterschaftsgeld",
+        detail=(f"Mutterschaftsgeld is based on {p.label}'s net pay in {months}. With Steuerklasse III instead of "
+                f"{p.steuerklasse.value.replace('_FAKTOR', ' with Faktor')} from {eff} ({other} V), {p.label} takes "
+                f"home about {eur(more)} more a month"
+                + (f" in {covered} of these months" if covered < 3 else "")
+                + f", which raises the employer's top-up: about {eur(gain)} more for the household. File the change "
+                f"with the Finanzamt by {deadline.strftime('%d.%m.%Y')} – it applies from the following month."
+                + eg_note),
+        legal_basis="§§ 20, 21 Abs. 1 MuSchG; § 39 Abs. 6 Satz 3, 5 EStG; § 2c Abs. 3 BEEG",
+        confidence="estimate", impact_eur=gain, deadline=deadline,
+        caveats=[f"{other}'s monthly net pay drops in class V until the tax return; the joint annual tax is "
+                 "unchanged and a tax return becomes mandatory (§ 46 Abs. 2 Nr. 3a EStG).",
+                 "Switching to raise the top-up is generally accepted; your employer may still ask about it.",
+                 f"After the birth, switch to whatever suits your cash flow – e.g. {other} III while "
+                 f"{p.label} receives Elterngeld."],
+    )
+
+
 def _amount_recommendations(req: AnalyseRequest, outcomes: list[ParentOutcome], plan: PlanResult,
                             today: date, preset_results: list[dict]) -> list[A.Recommendation]:
     recs: list[A.Recommendation] = []
@@ -738,6 +821,10 @@ def _amount_recommendations(req: AnalyseRequest, outcomes: list[ParentOutcome], 
                     bmz_early=outcomes[i].bmz_early,
                     today=today, gain_household=cent(gain), gain_parent=cent(gain_parent),
                     current=req.parents[i].steuerklasse.value.replace("_FAKTOR", " mit Faktor"), target="III"))
+
+    mg = _mutterschaftsgeld_switch(req, outcomes, plan, today, gb)
+    if mg:
+        recs.append(mg)
 
     # Part-time during Plus
     for p, o in zip(req.parents, outcomes):

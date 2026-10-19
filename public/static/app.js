@@ -984,8 +984,10 @@ function choicesCard(r) {
       : t.too_late
         ? `${r.parents.map((_, i) => `${label(i)} ${className(best.classes[i])}`).join(" / ")} would have brought ${eur(best.difference)} more Elterngeld, but the deadline (${latest}) has passed for this child.`
         : `Switch to ${r.parents.map((_, i) => `${label(i)} ${className(best.classes[i])}`).join(" / ")}: ${eur(best.difference)} more Elterngeld for this month plan. Apply to the Finanzamt by ${deadline}.${timing}`;
+    const mg = r.recommendations.find((x) => x.id === "steuerklasse_mutterschaftsgeld");
+    const mgLine = mg ? `<p class="pick">Mutterschaftsgeld: class III for ${esc(mg.title.split(":")[0])} still adds about ${eur(mg.impact_eur, false)} – file by ${new Date(mg.deadline).toLocaleDateString("de-DE")} (see the recommendations).</p>` : "";
     tax = `<section class="choice"><h3>Tax class – for the Elterngeld</h3>
-      <p class="pick">${verdict}</p>
+      <p class="pick">${verdict}</p>${mgLine}
       <div class="table-scroll"><table class="choice-table"><thead><tr><th>Classes</th><th class="num">Elterngeld, this plan</th><th class="num">Difference</th><th class="num">Net pay now / month</th></tr></thead><tbody>${rows}</tbody></table></div>
       <p class="hint">Elterngeld uses the class held in most of the 12 months before birth (Mutterschutz months excluded), so the parent who takes more Elterngeld months gains from class III (§ 2c Abs. 3 BEEG). The total income tax for the year stays the same: III/V only shifts it between the payslips and makes a tax return mandatory. "Net pay now" is the household's estimated take-home pay per month before the birth. After the birth the class no longer changes the Elterngeld, so you can switch to whatever suits your cash flow – but Elterngeld raises the tax rate on other income (§ 32b EStG), so expect a back-payment with the tax return.${t.plan_valid ? "" : " The month plan has errors, so these totals are provisional."}</p></section>`;
   }
