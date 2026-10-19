@@ -561,3 +561,23 @@ def test_mutterschaftsgeld_switch_independent_of_income_cap():
     over = {**COUPLE, "zve": {"mode": "bescheid", "bescheid_values": [180000]}}
     rec = _mg_rec(over)
     assert rec and not any("income cap" in c for c in rec["caveats"])
+
+
+def test_tax_class_phases_follow_the_month_plan():
+    tc = client.post("/api/analyse", json=COUPLE).json()["social"]["tax_class"]
+    got = [(p["from"], p["to"], p["classes"], p["file_by"], p["reason"]) for p in tc["phases"]]
+    assert got == [
+        ("2026-10", "2027-01", ["IV", "IV"], None, "current"),
+        ("2027-02", "2027-05", ["III", "V"], "2027-01-31", "mutterschaftsgeld"),  # Mutterschaftsgeld: net of Feb–Apr
+        ("2027-06", "2028-06", ["V", "III"], "2027-05-31", "one_earner"),         # Anna on Mutterschutz/Elterngeld
+        ("2028-07", "2028-08", ["III", "V"], "2028-06-30", "one_earner"),         # Ben's 2 Basis months
+        ("2028-09", "2028-09", ["IV", "IV"], "2028-08-31", "both_earn"),
+    ], got
+    one_earner = tc["phases"][2]
+    assert float(one_earner["take_home"][0]) == 0 and float(one_earner["benefits"][0]) > 0
+    assert float(one_earner["take_home"][1]) > float(tc["phases"][0]["take_home"][1])  # Ben III > Ben IV
+
+
+def test_tax_class_phases_only_for_married_couples():
+    tc = client.post("/api/analyse", json={**COUPLE, "household": "partnership"}).json()["social"]["tax_class"]
+    assert tc == {"applicable": False}

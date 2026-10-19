@@ -269,6 +269,7 @@ body { padding-bottom: 96px; }
 .verdict.not_met .headline { color: var(--red); }
 .verdict.conditional .headline { color: var(--amber); }
 
+.tax-phases th small, .tax-phases td small { display: block; font-weight: 400; color: var(--muted); font-size: .8rem; }
 .zve-breakdown { margin: 12px 0; }
 .zve-breakdown summary { cursor: pointer; font-weight: 600; }
 .zve-breakdown table { margin: 8px 0; width: 100%; max-width: 520px; }

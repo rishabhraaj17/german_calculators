@@ -933,6 +933,35 @@ function healthCard(r) {
 const CLASS_NAME = { IV_FAKTOR: "IV with Faktor" };
 const className = (k) => CLASS_NAME[k] || k;
 
+const PHASE_REASON = {
+  current: "Your current classes.",
+  mutterschaftsgeld: "Mutterschaftsgeld is based on the net pay of these months – III for the birthing parent raises it.",
+  one_earner: "Only one of you has a salary – III for the earner gives the most take-home.",
+  both_earn: "Both of you earn – IV/IV keeps refunds and back payments small; IV with Faktor is the most precise.",
+  no_salary: "No salary in these months – no change needed.",
+};
+const monthLabel = (ym) => { const [y, m] = ym.split("-"); return `${m}/${y}`; };
+
+/** Tax classes along the month plan: phases, filing dates and take-home per month. */
+function taxPhases(r, t) {
+  if (!t.phases?.length) return "";
+  const dot = (i) => `<span class="who" style="--c:${PARENT_COLORS[i]}"></span>`;
+  const rows = t.phases.map((ph) => {
+    const who = ph.classes.map((k, i) => `${dot(i)}${className(k)}`).join(" / ");
+    const money = (i) => `${Number(ph.take_home[i]) ? eur(ph.take_home[i]) : "–"}${Number(ph.benefits[i]) ? `<small>+ ${eur(ph.benefits[i])} Mutterschafts-/Elterngeld</small>` : ""}`;
+    return `<tr><th>${monthLabel(ph.from)}${ph.to !== ph.from ? `–${monthLabel(ph.to)}` : ""}<small>${ph.months} month${ph.months > 1 ? "s" : ""}</small></th>
+      <td>${who}<small>${esc(PHASE_REASON[ph.reason] || "")}</small></td>
+      <td>${ph.file_by ? `<strong>${new Date(ph.file_by).toLocaleDateString("de-DE")}</strong>` : "–"}</td>
+      ${ph.take_home.map((_, i) => `<td class="num">${money(i)}</td>`).join("")}
+      <td class="num"><strong>${eur(ph.household)}</strong></td></tr>`;
+  }).join("");
+  const heads = r.parents.map((x, i) => `<th class="num">${dot(i)}${esc(x.label)}</th>`).join("");
+  return `<section class="choice tax-phases"><h3>Tax classes through the year</h3>
+    <p class="hint">Along your month plan. You may switch as often as you like; each switch applies from the month after you file it with the Finanzamt (ELSTER), for the current year until 30 November (§ 39 Abs. 6 EStG). Amounts are average take-home per month.</p>
+    <div class="table-scroll"><table><thead><tr><th>Months</th><th>Classes</th><th>File by</th>${heads}<th class="num">Household</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="hint">The joint income tax for the year is the same in every combination – the classes only change what is withheld each month. III/V and Elterngeld make a tax return mandatory, and Mutterschaftsgeld and Elterngeld raise the tax rate on your other income (Progressionsvorbehalt, § 32b EStG): set money aside for a back payment. A one-off payment (bonus) is taxed with the class of the month it is paid in – in III less is withheld now and more is due with the return, in V the other way round.</p></section>`;
+}
+
 function choicesCard(r) {
   const s = r.social;
   const label = (i) => esc(r.parents[i].label);
@@ -989,7 +1018,7 @@ function choicesCard(r) {
     tax = `<section class="choice"><h3>Tax class – for the Elterngeld</h3>
       <p class="pick">${verdict}</p>${mgLine}
       <div class="table-scroll"><table class="choice-table"><thead><tr><th>Classes</th><th class="num">Elterngeld, this plan</th><th class="num">Difference</th><th class="num">Net pay now / month</th></tr></thead><tbody>${rows}</tbody></table></div>
-      <p class="hint">Elterngeld uses the class held in most of the 12 months before birth (Mutterschutz months excluded), so the parent who takes more Elterngeld months gains from class III (§ 2c Abs. 3 BEEG). The total income tax for the year stays the same: III/V only shifts it between the payslips and makes a tax return mandatory. "Net pay now" is the household's estimated take-home pay per month before the birth. After the birth the class no longer changes the Elterngeld, so you can switch to whatever suits your cash flow – but Elterngeld raises the tax rate on other income (§ 32b EStG), so expect a back-payment with the tax return.${t.plan_valid ? "" : " The month plan has errors, so these totals are provisional."}</p></section>`;
+      <p class="hint">Elterngeld uses the class held in most of the 12 months before birth (Mutterschutz months excluded), so the parent who takes more Elterngeld months gains from class III (§ 2c Abs. 3 BEEG). The total income tax for the year stays the same: III/V only shifts it between the payslips and makes a tax return mandatory. "Net pay now" is the household's estimated take-home pay per month before the birth. After the birth the class no longer changes the Elterngeld, so you can switch to whatever suits your cash flow – but Elterngeld raises the tax rate on other income (§ 32b EStG), so expect a back-payment with the tax return.${t.plan_valid ? "" : " The month plan has errors, so these totals are provisional."}</p></section>` + taxPhases(r, t);
   }
   return `<div class="card social choices" id="choices"><h2>Who takes what</h2>
     <p class="hint">Suggestions based on your numbers and the month plan above. They change when you change the plan.</p>
