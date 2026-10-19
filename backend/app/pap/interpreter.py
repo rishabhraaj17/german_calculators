@@ -191,6 +191,18 @@ class Programmablaufplan:
             self._results[key] = hit
         return dict(hit)
 
+    def income_tax(self, zve: Decimal, joint: bool) -> int:
+        """Annual income tax per § 32a EStG (splitting if `joint`), using the PAP's own tariff routine:
+        MPARA sets the year's parameters, UPTABxx applies the tariff to X = zvE / KZTAB."""
+        scope = self._initial_scope({})
+        self._exec_block(self._methods["MPARA"], scope)
+        kztab = 2 if joint else 1
+        scope["KZTAB"] = kztab
+        scope["X"] = BigDecimal(max(zve, Decimal(0)) / kztab).setScale(0, ROUND_DOWN)
+        uptab = next(name for name in self._methods if name.startswith("UPTAB"))
+        self._exec_block(self._methods[uptab], scope)
+        return int(scope["ST"].v)
+
 
 # Security note: compile()/eval() above only ever run expressions taken from
 # these bundled, checksum-pinned BMF files (never user input; user values enter

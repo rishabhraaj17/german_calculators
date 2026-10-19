@@ -1014,7 +1014,7 @@ function choicesCard(r) {
         ? `${r.parents.map((_, i) => `${label(i)} ${className(best.classes[i])}`).join(" / ")} would have brought ${eur(best.difference)} more Elterngeld, but the deadline (${latest}) has passed for this child.`
         : `Switch to ${r.parents.map((_, i) => `${label(i)} ${className(best.classes[i])}`).join(" / ")}: ${eur(best.difference)} more Elterngeld for this month plan. Apply to the Finanzamt by ${deadline}.${timing}`;
     const mg = r.recommendations.find((x) => x.id === "steuerklasse_mutterschaftsgeld");
-    const mgLine = mg ? `<p class="pick">Mutterschaftsgeld: class III for ${esc(mg.title.split(":")[0])} still adds about ${eur(mg.impact_eur, false)} – file by ${new Date(mg.deadline).toLocaleDateString("de-DE")} (see the recommendations).</p>` : "";
+    const mgLine = mg ? `<p class="pick">Mutterschaftsgeld: class III for ${esc(mg.title.split(":")[0])} still adds about ${eur(mg.impact_eur, false)} after tax – file by ${new Date(mg.deadline).toLocaleDateString("de-DE")} (see the recommendations).</p>` : "";
     tax = `<section class="choice"><h3>Tax class – for the Elterngeld</h3>
       <p class="pick">${verdict}</p>${mgLine}
       <div class="table-scroll"><table class="choice-table"><thead><tr><th>Classes</th><th class="num">Elterngeld, this plan</th><th class="num">Difference</th><th class="num">Net pay now / month</th></tr></thead><tbody>${rows}</tbody></table></div>

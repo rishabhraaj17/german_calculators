@@ -178,3 +178,22 @@ def test_minijob_limit_of_the_year_before_birth():
     g, f = D(603), D("0.6667")
     base = f * g + (D(2000) / (2000 - g) - g / (2000 - g) * f) * (700 - g)
     assert E.sozialabgaben(D(700), m, date(2027, 5, 1)) == E.cent(E.cent(base) * D("0.21"))
+
+
+def test_income_tax_tariff_from_the_official_pap():
+    # § 32a EStG via the PAP's own UPTAB routine; by hand: 2026, 50 000 € single:
+    # z = (50 000 − 17 799) / 10 000 = 3.2201 -> (173.10 z + 2 397) z + 1 034.87 = 10 548.34 -> 10 548
+    from app.pap.interpreter import load_pap
+    assert load_pap(2026).income_tax(D(50000), joint=False) == 10548
+    assert load_pap(2026).income_tax(D(100000), joint=True) == 2 * 10548  # splitting
+    assert load_pap(2026).income_tax(D(12348), joint=False) == 0  # Grundfreibetrag
+    assert load_pap(2025).income_tax(D(50000), joint=False) == 10691
+
+
+def test_progressionsvorbehalt():
+    # § 32b: the rate of (zvE + tax-free benefits) applies to the zvE
+    from app.einkommensteuer import income_tax, with_progressionsvorbehalt
+    base = income_tax(D(100000), 2026, joint=True)
+    with_pv = with_progressionsvorbehalt(D(100000), D(20000), 2026, joint=True)
+    assert with_pv == int(D(100000) * income_tax(D(120000), 2026, joint=True) / D(120000))
+    assert with_pv > base and with_progressionsvorbehalt(D(100000), D(0), 2026, joint=True) == base

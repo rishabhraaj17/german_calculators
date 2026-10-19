@@ -581,3 +581,15 @@ def test_tax_class_phases_follow_the_month_plan():
 def test_tax_class_phases_only_for_married_couples():
     tc = client.post("/api/analyse", json={**COUPLE, "household": "partnership"}).json()["social"]["tax_class"]
     assert tc == {"applicable": False}
+
+
+def test_mutterschaftsgeld_switch_shows_real_gain_after_progressionsvorbehalt():
+    from app.models import AnalyseRequest
+    from app import service as S
+    req = AnalyseRequest(**COUPLE)
+    S.analyse(req)
+    sw = req._memo["mg_switch"]
+    assert sw["extra_tax"] > 0 and sw["net_gain"] == sw["gain"] - sw["extra_tax"]
+    rec = _mg_rec(COUPLE)
+    assert float(rec["impact_eur"]) == float(sw["net_gain"])  # the headline amount is the real gain
+    assert "Progressionsvorbehalt" in rec["detail"]
