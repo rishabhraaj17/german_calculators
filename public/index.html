@@ -7,7 +7,7 @@
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=0b74ea6584">
+<link rel="stylesheet" href="/static/styles.css?v=c9dddf5eff">
 <script>try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch {}</script>
 </head>
 <body>
@@ -139,6 +139,7 @@
         <option value="one_off" selected>One-off</option>
         <option value="monthly">With every salary</option></select></label>
       <label class="field one-off-only"><span class="t">… of that not yet paid</span><small>helps to stay under the cap</small><input type="number" name="bonuses_pending" min="0" step="0.01" inputmode="decimal" value="0"></label>
+      <label class="field"><span class="t">Bonuses in later years</span><small>month and amount, e.g. 2027-03 44000 – for the tax on Mutterschafts-/Elterngeld</small><input name="future_one_offs" placeholder="2027-03 44000"></label>
       <label class="field"><span class="t">Company pension (bAV) per month</span><small>your own salary conversion</small><input type="number" name="bav_monthly" min="0" step="0.01" inputmode="decimal" value="0"></label>
       <label class="field"><span class="t">Kinderfreibeträge</span><small>as on the payslip</small><input type="number" name="kinderfreibetraege" value="0" min="0" step="0.5"></label>
       <label class="field"><span class="t">Health insurance</span><small>decides who pays Mutterschaftsgeld</small><select name="kv_art">
@@ -261,6 +262,6 @@
     <input type="file" id="import-file" accept="application/json,.json" hidden>
   </div>
 </nav>
-<script src="/static/app.js?v=0b74ea6584"></script>
+<script src="/static/app.js?v=c9dddf5eff"></script>
 </body>
 </html>

@@ -105,6 +105,14 @@ $("#add-sibling").addEventListener("click", () => addSibling());
 // ---------- request -------------------------------------------------------
 const num = (el) => (el && el.value !== "" ? Number(el.value) : null);
 
+/** "2027-03 44000, 2028-03 45.000" -> [{month, amount}]; 44.000 / 44,000 are read as thousands. */
+function parseOneOffs(text) {
+  return [...text.matchAll(/(\d{4}-(?:0[1-9]|1[0-2]))\s*[:=]?\s*(\d(?:[\d.,]*\d)?)(?![\d-])/g)].map(([, month, raw]) => {
+    const amount = /^\d{1,3}([.,]\d{3})+$/.test(raw) ? Number(raw.replace(/[.,]/g, "")) : Number(raw.replace(",", "."));
+    return { month, amount };
+  }).filter((x) => x.amount > 0);
+}
+
 function parentPayload(node) {
   const v = (n) => $(`[name=${n}]`, node);
   return {
@@ -130,6 +138,7 @@ function parentPayload(node) {
     weekly_hours: num(v("weekly_hours")) ?? 40,
     include_mutterschutz_months: v("include_mutterschutz_months").checked,
     part_time_other_employer: v("part_time_other_employer").checked,
+    future_one_offs: parseOneOffs(v("future_one_offs").value),
     extra_excluded_months: v("extra_excluded_months").value.split(/[\s,;]+/).filter((s) => /^\d{4}-(0[1-9]|1[0-2])$/.test(s)),
     // starting plan before the month planner is used: birthing parent 12 Basis, the other 2
     plan: { basis_months: v("birthing_parent").checked ? (form.single_parent_4c.checked ? 14 : 12) : 2 },
@@ -286,6 +295,7 @@ function fillForm(data) {
       "faktor", "kirchensteuer", "include_mutterschutz_months", "part_time_other_employer", "kinderfreibetraege", "net_monthly", "vacation_days", "private_premium", "part_time_gross", "part_time_hours", "weekly_hours",
     ].forEach((k) => setField(node, k, p[k]));
     setField(node, "extra_excluded_months", (p.extra_excluded_months || []).join(", "));
+    setField(node, "future_one_offs", (p.future_one_offs || []).map((x) => `${x.month} ${x.amount}`).join(", "));
     setField(node, "kv_art", p.kv_art || (p.kv_pflichtversichert === false ? "gkv_freiwillig" : "gkv_pflicht"));
     const b = p.basics || {};
     setField(node, "wohnsitz", b.wohnsitz_in_deutschland);
@@ -950,7 +960,7 @@ function taxPhases(r, t) {
     const who = ph.classes.map((k, i) => `${dot(i)}${className(k)}`).join(" / ");
     const money = (i) => `${Number(ph.take_home[i]) ? eur(ph.take_home[i]) : "–"}${Number(ph.benefits[i]) ? `<small>+ ${eur(ph.benefits[i])} Mutterschafts-/Elterngeld</small>` : ""}`;
     return `<tr><th>${monthLabel(ph.from)}${ph.to !== ph.from ? `–${monthLabel(ph.to)}` : ""}<small>${ph.months} month${ph.months > 1 ? "s" : ""}</small></th>
-      <td>${who}<small>${esc(PHASE_REASON[ph.reason] || "")}</small></td>
+      <td>${who}<small>${esc(PHASE_REASON[ph.reason] || "")}</small>${(ph.one_offs || []).map((o) => `<small class="one-off">${dot(o.parent)}Bonus ${monthLabel(o.month)}: ${eur(o.amount, false)} in class ${className(o.class)} – about ${eur(o.withheld, false)} withheld${o.swapped_class ? ` (in ${o.swapped_class}: ${eur(o.withheld_swapped, false)})` : ""}</small>`).join("")}</td>
       <td>${ph.file_by ? `<strong>${new Date(ph.file_by).toLocaleDateString("de-DE")}</strong>` : "–"}</td>
       ${ph.take_home.map((_, i) => `<td class="num">${money(i)}</td>`).join("")}
       <td class="num"><strong>${eur(ph.household)}</strong></td></tr>`;

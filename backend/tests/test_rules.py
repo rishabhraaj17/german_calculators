@@ -197,3 +197,14 @@ def test_progressionsvorbehalt():
     with_pv = with_progressionsvorbehalt(D(100000), D(20000), 2026, joint=True)
     assert with_pv == int(D(100000) * income_tax(D(120000), 2026, joint=True) / D(120000))
     assert with_pv > base and with_progressionsvorbehalt(D(100000), D(0), 2026, joint=True) == base
+
+
+def test_one_off_withholding_depends_on_the_tax_class():
+    from app.models import Erwerbsart, Steuerklasse
+    from app.mutterschutz import one_off_withholding
+    kw = dict(erwerbsart=Erwerbsart.ANGESTELLT, faktor=D(1), kirchensteuer=False, kinderfreibetraege=D(0),
+              kv_art="gkv_pflicht", children_under_25=1, year=2026)
+    iii = one_off_withholding(D(10000), D(60000), steuerklasse=Steuerklasse.III, **kw)
+    v = one_off_withholding(D(10000), D(60000), steuerklasse=Steuerklasse.V, **kw)
+    assert 0 < iii < v < D(10000)
+    assert one_off_withholding(D(0), D(60000), steuerklasse=Steuerklasse.V, **kw) == 0

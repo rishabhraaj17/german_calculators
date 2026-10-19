@@ -32,6 +32,7 @@ def next_month(m: Month) -> Month:
 class MonthIncome:
     gross: tuple[Decimal, ...]  # salary gross per parent in this calendar month
     benefits: tuple[Decimal, ...]  # Mutterschaftsgeld + Elterngeld per parent (tax-free)
+    one_off: tuple[Decimal, ...] = (ZERO, ZERO)  # one-off payments (bonus) per parent, not in `gross`
 
 
 def plan_classes(*, months: list[Month], current: tuple[str, str], birth: date, birthing: int | None,
@@ -62,8 +63,12 @@ def plan_classes(*, months: list[Month], current: tuple[str, str], birth: date, 
 
 def phases(*, today: date, end: Month, current: tuple[str, str], birth: date, birthing: int | None,
            mg_from: Month | None, income: Callable[[Month], MonthIncome],
-           take_home: Callable[[int, Decimal, str, Month], Decimal]) -> list[dict]:
-    """Consecutive months with the same classes, with the filing deadline and average take-home."""
+           take_home: Callable[[int, Decimal, str, Month], Decimal],
+           withholding: Callable[[int, Decimal, Decimal, str, Month], Decimal] | None = None) -> list[dict]:
+    """Consecutive months with the same classes, with the filing deadline and average take-home.
+
+    One-off payments are listed per phase with the tax withheld in the class of that month and, for III
+    or V, in the swapped class – the difference evens out in the joint tax return."""
     months: list[Month] = []
     m: Month = (today.year, today.month)
     while m <= end:
@@ -82,8 +87,17 @@ def phases(*, today: date, end: Month, current: tuple[str, str], birth: date, bi
             ph = {"from": m, "to": m, "classes": list(combo), "months": 0,
                   "file_by": None if not out else first - timedelta(days=1),
                   "reason": _reason(m, inc, birth, mg_from), "_net": [ZERO, ZERO],
-                  "_benefits": [ZERO, ZERO]}
+                  "_benefits": [ZERO, ZERO], "one_offs": []}
             out.append(ph)
+        for i in range(2):
+            if inc.one_off[i] > 0 and withholding is not None:
+                regular = sum((income((m[0], k)).gross[i] for k in range(1, 13)), ZERO)
+                swapped = {"III": "V", "V": "III"}.get(combo[i])
+                ph["one_offs"].append({
+                    "parent": i, "month": f"{m[0]}-{m[1]:02d}", "amount": inc.one_off[i], "class": combo[i],
+                    "withheld": withholding(i, inc.one_off[i], regular, combo[i], m),
+                    "swapped_class": swapped,
+                    "withheld_swapped": withholding(i, inc.one_off[i], regular, swapped, m) if swapped else None})
         ph["to"] = m
         ph["months"] += 1
         for i in range(2):

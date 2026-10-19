@@ -63,7 +63,7 @@ h2, h3 { line-height: 1.25; }
   border-top: 1px solid var(--rule); color: var(--muted); font-size: .88rem;
 }
 .disclaimer h2 { font-size: 1rem; margin: 0 0 8px; color: var(--ink); }
-.disclaimer p { max-width: 90ch; margin: 0 0 8px; }
+.disclaimer p { margin: 0 0 8px; }
 .layout {
   max-width: 1280px; margin: 0 auto; padding: 24px;
   display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 32px; align-items: start;
@@ -270,6 +270,7 @@ body { padding-bottom: 96px; }
 .verdict.conditional .headline { color: var(--amber); }
 
 .tax-phases th small, .tax-phases td small { display: block; font-weight: 400; color: var(--muted); font-size: .8rem; }
+.tax-phases td small.one-off { color: var(--ink); margin-top: 4px; }
 .zve-breakdown { margin: 12px 0; }
 .zve-breakdown summary { cursor: pointer; font-weight: 600; }
 .zve-breakdown table { margin: 8px 0; width: 100%; max-width: 520px; }

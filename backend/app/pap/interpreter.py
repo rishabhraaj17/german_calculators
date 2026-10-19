@@ -199,7 +199,7 @@ class Programmablaufplan:
         kztab = 2 if joint else 1
         scope["KZTAB"] = kztab
         scope["X"] = BigDecimal(max(zve, Decimal(0)) / kztab).setScale(0, ROUND_DOWN)
-        uptab = next(name for name in self._methods if name.startswith("UPTAB"))
+        uptab = next(name for name in self._methods if name and name.startswith("UPTAB"))
         self._exec_block(self._methods[uptab], scope)
         return int(scope["ST"].v)
 

@@ -92,6 +92,25 @@ class Mutterschaftsgeld:
         return cent(self.before_birth + self.from_birth + self.bas_total)
 
 
+def _pap_inputs(*, erwerbsart: Erwerbsart, steuerklasse: Steuerklasse, faktor: Decimal, kirchensteuer: bool,
+                kinderfreibetraege: Decimal, kv_art: str, children_under_25: int, ty: P.TaxYear) -> dict:
+    childless = children_under_25 == 0
+    return {
+        "af": 1 if steuerklasse == Steuerklasse.IV_FAKTOR else 0,
+        "f": float(faktor) if steuerklasse == Steuerklasse.IV_FAKTOR else 1.0,
+        "ALV": 0 if erwerbsart == Erwerbsart.ANGESTELLT else 1,
+        "KRV": 1 if erwerbsart == Erwerbsart.BEAMT else 0,
+        "KVZ": ty.avg_kv_zusatzbeitrag_pct,
+        "PKV": 1 if kv_art == "privat" else 0, "PKPV": 0, "PKPVAGZ": 0,
+        "PVA": 0 if childless else max(0, min(children_under_25, 5) - 1), "PVS": 0, "PVZ": 1 if childless else 0,
+        "R": 1 if kirchensteuer else 0, "STKL": _STKL[steuerklasse.value], "ZKF": kinderfreibetraege,
+    }
+
+
+def _pap_year(year: int) -> int:
+    return min(max(year, min(SUPPORTED_YEARS)), max(SUPPORTED_YEARS))
+
+
 def estimate_net_monthly(
     gross: Decimal, *, erwerbsart: Erwerbsart, steuerklasse: Steuerklasse, faktor: Decimal, kirchensteuer: bool,
     kinderfreibetraege: Decimal, kv_art: str, children_under_25: int, year: int,
@@ -99,22 +118,14 @@ def estimate_net_monthly(
     """Rough payslip net pay (real tax class and contributions, not the notional Elterngeld net)."""
     if gross <= 0:
         return ZERO
-    pap_year = min(max(year, min(SUPPORTED_YEARS)), max(SUPPORTED_YEARS))
+    pap_year = _pap_year(year)
     ty = P.TAX_YEARS[pap_year]
     childless = children_under_25 == 0
     pva = max(0, min(children_under_25, 5) - 1)
     pap = load_pap(pap_year)
-    inputs = {
-        "af": 1 if steuerklasse == Steuerklasse.IV_FAKTOR else 0,
-        "f": float(faktor) if steuerklasse == Steuerklasse.IV_FAKTOR else 1.0,
-        "ALV": 0 if erwerbsart == Erwerbsart.ANGESTELLT else 1,
-        "KRV": 1 if erwerbsart == Erwerbsart.BEAMT else 0,
-        "KVZ": ty.avg_kv_zusatzbeitrag_pct, "LZZ": 2,
-        "PKV": 1 if kv_art == "privat" else 0, "PKPV": 0, "PKPVAGZ": 0,
-        "PVA": 0 if childless else pva, "PVS": 0, "PVZ": 1 if childless else 0,
-        "R": 1 if kirchensteuer else 0, "RE4": int(cent(gross) * 100),
-        "STKL": _STKL[steuerklasse.value], "ZKF": kinderfreibetraege,
-    }
+    inputs = _pap_inputs(erwerbsart=erwerbsart, steuerklasse=steuerklasse, faktor=faktor, kirchensteuer=kirchensteuer,
+                         kinderfreibetraege=kinderfreibetraege, kv_art=kv_art, children_under_25=children_under_25, ty=ty)
+    inputs.update(LZZ=2, RE4=int(cent(gross) * 100))
     out = pap.run(**{k: v for k, v in inputs.items() if k in pap.inputs})
     tax = (Decimal(out["LSTLZZ"]) + Decimal(out["SOLZLZZ"])) / 100 + cent(Decimal(out["BK"]) / 100 * CHURCH_RATE_ACTUAL)
     sv = ZERO
@@ -126,6 +137,25 @@ def estimate_net_monthly(
             pv_rate = P.PV_AN_RATE + (PV_CHILDLESS_SURCHARGE if childless else -PV_REDUCTION_PER_CHILD * pva)
             sv += kv_base * (P.KV_AN_GENERAL_RATE + ty.avg_kv_zusatzbeitrag_pct / 200) + kv_base * pv_rate
     return cent(max(gross - tax - sv, ZERO))
+
+
+def one_off_withholding(
+    amount: Decimal, annual_regular: Decimal, *, erwerbsart: Erwerbsart, steuerklasse: Steuerklasse, faktor: Decimal,
+    kirchensteuer: bool, kinderfreibetraege: Decimal, kv_art: str, children_under_25: int, year: int,
+) -> Decimal:
+    """Lohnsteuer, Soli and church tax withheld on a one-off payment (sonstiger Bezug, § 39b Abs. 3 EStG):
+    the PAP taxes it on top of the expected regular annual wage, in the payee's tax class."""
+    if amount <= 0:
+        return ZERO
+    pap_year = _pap_year(year)
+    pap = load_pap(pap_year)
+    inputs = _pap_inputs(erwerbsart=erwerbsart, steuerklasse=steuerklasse, faktor=faktor, kirchensteuer=kirchensteuer,
+                         kinderfreibetraege=kinderfreibetraege, kv_art=kv_art, children_under_25=children_under_25,
+                         ty=P.TAX_YEARS[pap_year])
+    regular = int(cent(annual_regular) * 100)
+    inputs.update(LZZ=1, RE4=regular, JRE4=regular, SONSTB=int(cent(amount) * 100))
+    out = pap.run(**{k: v for k, v in inputs.items() if k in pap.inputs})
+    return cent((Decimal(out["STS"]) + Decimal(out["SOLZS"])) / 100 + Decimal(out["BKS"]) / 100 * CHURCH_RATE_ACTUAL)
 
 
 def mutterschaftsgeld(

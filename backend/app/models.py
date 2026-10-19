@@ -38,6 +38,11 @@ class PlanIn(BaseModel):
     bonus_months: int = Field(0, ge=0, le=4)
 
 
+class OneOffPayment(BaseModel):
+    month: CalendarMonth
+    amount: Money = Field(gt=0, le=10_000_000)
+
+
 class ParentIn(BaseModel):
     label: str = Field("Parent A", max_length=40)
     birthing_parent: bool = False
@@ -70,6 +75,9 @@ class ParentIn(BaseModel):
     # "one_off": sonstige Bezüge (annual bonus, 13th salary). "monthly": paid in equal parts with every
     # salary – then it is laufender Arbeitslohn and counts for Elterngeld like the monthly gross.
     bonus_payment: Literal["one_off", "monthly"] = "one_off"
+    # One-off payments expected from the year of birth on (e.g. next year's annual bonus). They don't
+    # count for Elterngeld but raise the income tax on Mutterschaftsgeld/Elterngeld (§ 32b EStG).
+    future_one_offs: list[OneOffPayment] = Field(default_factory=list, max_length=12)
     # Employee salary conversion into a company pension (Direktversicherung, Pensionskasse,
     # Pensionsfonds) per month. `monthly_gross` is the gross BEFORE this conversion.
     bav_monthly: Money = Field(Decimal(0), ge=0, le=100_000)
@@ -218,4 +226,8 @@ class AnalyseRequest(BaseModel):
         if self.timeline is not None:
             if len(self.timeline) != len(self.parents) or any(len(t) > 36 for t in self.timeline):
                 raise ValueError("timeline needs one row (max. 36 months) per parent")
+        for p in self.parents:
+            if any(int(x.month[:4]) < self.birth_date.year for x in p.future_one_offs):
+                raise ValueError(f"one-off payments before {self.birth_date.year} belong in the bonuses of the "
+                                 "year before birth")
         return self

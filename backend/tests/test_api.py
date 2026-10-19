@@ -593,3 +593,36 @@ def test_mutterschaftsgeld_switch_shows_real_gain_after_progressionsvorbehalt():
     rec = _mg_rec(COUPLE)
     assert float(rec["impact_eur"]) == float(sw["net_gain"])  # the headline amount is the real gain
     assert "Progressionsvorbehalt" in rec["detail"]
+
+
+def _with_bonus(month: str, amount: float) -> dict:
+    parents = [dict(p) for p in COUPLE["parents"]]
+    parents[1]["future_one_offs"] = [{"month": month, "amount": amount}]
+    return {**COUPLE, "parents": parents}
+
+
+def test_future_bonus_raises_the_tax_on_the_extra_mutterschaftsgeld():
+    from app.models import AnalyseRequest
+    from app import service as S
+    base, bonus = AnalyseRequest(**COUPLE), AnalyseRequest(**_with_bonus("2027-09", 40000))
+    S.analyse(base)
+    S.analyse(bonus)
+    a, b = base._memo["mg_switch"], bonus._memo["mg_switch"]
+    assert b["gain"] == a["gain"]  # one-off payments don't count for Elterngeld or Mutterschaftsgeld
+    assert b["zve_birth_year"] > a["zve_birth_year"] and b["extra_tax"] > a["extra_tax"]
+    assert b["net_gain"] == b["gain"] - b["extra_tax"]
+    assert "one-off payments" in _mg_rec(_with_bonus("2027-09", 40000))["detail"]
+
+
+def test_future_bonus_is_shown_in_its_tax_class_phase():
+    tc = client.post("/api/analyse", json=_with_bonus("2027-09", 40000)).json()["social"]["tax_class"]
+    ph = next(p for p in tc["phases"] if p["one_offs"])
+    assert ph["from"] <= "2027-09" <= ph["to"] and ph["classes"] == ["V", "III"]
+    (o,) = ph["one_offs"]
+    assert o["parent"] == 1 and o["class"] == "III" and o["swapped_class"] == "V"
+    assert 0 < float(o["withheld"]) < float(o["withheld_swapped"]) < 40000  # III withholds less than V
+
+
+def test_bonus_before_the_birth_year_belongs_in_the_annual_bonuses():
+    r = client.post("/api/analyse", json=_with_bonus("2026-11", 5000))
+    assert r.status_code == 422 and "year before birth" in r.text

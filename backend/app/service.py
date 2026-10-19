@@ -27,7 +27,7 @@ from .elterngeld import (
 )
 from .fmt import eur
 from .models import AnalyseRequest, ParentIn, PayslipPersonIn, ZvEPersonIn
-from .mutterschutz import Mutterschaftsgeld, estimate_net_monthly, mutterschaftsgeld
+from .mutterschutz import Mutterschaftsgeld, estimate_net_monthly, mutterschaftsgeld, one_off_withholding
 from .plan import (EG_TYPES, MaternityCredit, ParentContext, PlanResult, forced_basis_months, add_months,
                    candidate_fixes, evaluate, from_counts, partnermonate_possible)
 from .plan import presets as plan_presets
@@ -706,10 +706,14 @@ def _month_income(req: AnalyseRequest, rows: list, m: Mutterschaftsgeld | None,
                   birthing: int | None) -> Callable[[Month], TP.MonthIncome]:
     """Salary gross and tax-free benefits per parent in a calendar month, from the month plan: regular pay
     before the birth (the birthing parent only until the Schutzfrist, then Mutterschaftsgeld), afterwards
-    the Lebensmonat that contains the 15th."""
+    the Lebensmonat that contains the 15th. One-off payments entered for the month are kept apart."""
     birth = req.birth_date
     ty = P.tax_year_for_birth(birth)
     regular = [elterngeld_brutto(p, ty) if p.erwerbsart != Erwerbsart.KEINE else ZERO for p in req.parents]
+
+    def one_offs(month: Month) -> tuple[Decimal, ...]:
+        key = f"{month[0]}-{month[1]:02d}"
+        return tuple(sum((x.amount for x in p.future_one_offs if x.month == key), ZERO) for p in req.parents)
 
     def income(month: Month) -> TP.MonthIncome:
         first = date(month[0], month[1], 1)
@@ -721,14 +725,14 @@ def _month_income(req: AnalyseRequest, rows: list, m: Mutterschaftsgeld | None,
                 worked = max((m.fristen.start - first).days, 0)
                 gross[birthing] = cent(regular[birthing] * worked / last.day)
                 benefits[birthing] = cent(m.paid_per_day * ((last - start).days + 1))
-            return TP.MonthIncome(tuple(gross), tuple(benefits))
+            return TP.MonthIncome(tuple(gross), tuple(benefits), one_offs(month))
         mid = max(date(month[0], month[1], 15), birth)
         lm = next((r for r in rows if r["start"] <= mid <= r["end"]), rows[-1])
         gross = tuple(Decimal(c.get("gross_pay", ZERO)) for c in lm["parents"])
         benefits = tuple((c["amount"] if c["type"] in EG_TYPES else ZERO)
                          + (cent(m.paid_per_day * c.get("mutterschutz_days", 0)) if m is not None else ZERO)
                          for c in lm["parents"])
-        return TP.MonthIncome(gross, benefits)
+        return TP.MonthIncome(gross, benefits, one_offs(month))
 
     return income
 
@@ -752,9 +756,17 @@ def _tax_class_phases(req: AnalyseRequest, outcomes: list[ParentOutcome], plan: 
                                     kirchensteuer=p.kirchensteuer, kinderfreibetraege=p.kinderfreibetraege,
                                     kv_art=_kv_art(p), children_under_25=children, year=month[0])
 
+    def withholding(i: int, amount: Decimal, regular: Decimal, cls: str, month: Month) -> Decimal:
+        p = req.parents[i]
+        children = len(req.siblings) + (req.children_expected if month >= (birth.year, birth.month) else 0)
+        return one_off_withholding(amount, regular, erwerbsart=p.erwerbsart, steuerklasse=Steuerklasse(cls),
+                                   faktor=p.faktor, kirchensteuer=p.kirchensteuer,
+                                   kinderfreibetraege=p.kinderfreibetraege, kv_art=_kv_art(p),
+                                   children_under_25=children, year=month[0])
+
     return TP.phases(today=today, end=end, current=(req.parents[0].steuerklasse.value, req.parents[1].steuerklasse.value),
                      birth=birth, birthing=birthing, mg_from=sw["effective"] if sw else None, income=income,
-                     take_home=take_home)
+                     take_home=take_home, withholding=withholding)
 
 
 def _maternity_json(req: AnalyseRequest) -> dict | None:
@@ -835,7 +847,8 @@ def _mg_switch(req: AnalyseRequest, outcomes: list[ParentOutcome], plan: PlanRes
     year = req.birth_date.year
     before, after = _month_income(req, plan.rows, m, i), _month_income(req, alt_plan.rows, m2, i)
     months = [(year, k) for k in range(1, 13)]
-    zve = cent(sum((sum(before(x).gross) for x in months), ZERO) * req._memo.get("zve_ratio", Decimal("0.8")))
+    one_offs = sum((sum(before(x).one_off) for x in months), ZERO)
+    zve = cent((sum((sum(before(x).gross) for x in months), ZERO) + one_offs) * req._memo.get("zve_ratio", Decimal("0.8")))
     benefits0 = sum((sum(before(x).benefits) for x in months), ZERO)
     benefits1 = sum((sum(after(x).benefits) for x in months), ZERO)
     extra_tax = Decimal(with_progressionsvorbehalt(zve, benefits1, year, joint=True)
@@ -845,7 +858,7 @@ def _mg_switch(req: AnalyseRequest, outcomes: list[ParentOutcome], plan: PlanRes
         return None
     return {"i": i, "j": j, "ref": ref, "effective": effective, "covered": covered, "more": more, "m2": m2,
             "classes": classes, "plan": alt_plan, "gain": gain, "extra_tax": extra_tax, "net_gain": net_gain,
-            "zve_birth_year": zve}
+            "zve_birth_year": zve, "one_offs_birth_year": one_offs}
 
 
 def _mg_switch_memo(req: AnalyseRequest, outcomes: list[ParentOutcome], plan: PlanResult, today: date) -> dict | None:
@@ -859,8 +872,8 @@ def _mutterschaftsgeld_switch(req: AnalyseRequest, outcomes: list[ParentOutcome]
     sw = _mg_switch_memo(req, outcomes, plan, today)
     if sw is None:
         return None
-    i, j, ref, effective, covered, more, classes, gain, extra_tax, net_gain = (sw[k] for k in (
-        "i", "j", "ref", "effective", "covered", "more", "classes", "gain", "extra_tax", "net_gain"))
+    i, j, ref, effective, covered, more, classes, gain, extra_tax, net_gain, one_offs = (sw[k] for k in (
+        "i", "j", "ref", "effective", "covered", "more", "classes", "gain", "extra_tax", "net_gain", "one_offs_birth_year"))
     p = req.parents[i]
     months = ", ".join(f"{mm:02d}/{y}" for y, mm in ref)
     eff = f"{effective[1]:02d}/{effective[0]}"
@@ -876,7 +889,9 @@ def _mutterschaftsgeld_switch(req: AnalyseRequest, outcomes: list[ParentOutcome]
                 f"home about {eur(more)} more a month"
                 + (f" in {covered} of these months" if covered < 3 else "")
                 + f", which raises the employer's top-up by about {eur(gain)}. Mutterschaftsgeld is tax-free but raises "
-                f"the tax rate on your other {req.birth_date.year} income (Progressionsvorbehalt): about "
+                f"the tax rate on your other {req.birth_date.year} income"
+                + (f", including {eur(one_offs)} in one-off payments" if one_offs else "")
+                + " (Progressionsvorbehalt): about "
                 f"{eur(extra_tax)} more income tax, so the real gain is about {eur(net_gain)}. Your annual tax is "
                 f"otherwise the same in every class combination. File the change with the Finanzamt by "
                 f"{deadline.strftime('%d.%m.%Y')} – it applies from the following month."
